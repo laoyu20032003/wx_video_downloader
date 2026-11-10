@@ -36,6 +36,59 @@ function Wrap-Pem([string]$label, [byte[]]$bytes) {
   return "-----BEGIN $label-----`n" + ($lines -join "`n") + "`n-----END $label-----`n"
 }
 
+# ---- DER 编码：Windows PowerShell 5.1 / .NET Framework 没有 ExportPkcs8PrivateKey，手工拼 PKCS#1 ----
+function Get-DerLength([int]$len) {
+  if ($len -lt 0x80) { return ,([byte[]]@([byte]$len)) }
+  $tmp = New-Object System.Collections.Generic.List[byte]
+  $n = $len
+  while ($n -gt 0) { $tmp.Insert(0, [byte]($n -band 0xFF)); $n = $n -shr 8 }
+  $res = New-Object System.Collections.Generic.List[byte]
+  $res.Add([byte](0x80 -bor $tmp.Count))
+  $res.AddRange($tmp)
+  return ,$res.ToArray()
+}
+
+function Get-DerInteger([byte[]]$be) {
+  $i = 0
+  while ($i -lt $be.Length - 1 -and $be[$i] -eq 0) { $i++ }
+  $v = New-Object System.Collections.Generic.List[byte]
+  if (($be[$i] -band 0x80) -ne 0) { $v.Add(0) }
+  for ($k = $i; $k -lt $be.Length; $k++) { $v.Add($be[$k]) }
+  $out = New-Object System.Collections.Generic.List[byte]
+  $out.Add(0x02)
+  $out.AddRange((Get-DerLength $v.Count))
+  $out.AddRange($v)
+  return ,$out.ToArray()
+}
+
+function Get-Pkcs1Der($rsa) {
+  $p = $rsa.ExportParameters($true)
+  $body = New-Object System.Collections.Generic.List[byte]
+  $body.AddRange([byte[]]@(0x02, 0x01, 0x00))   # version = 0
+  $body.AddRange((Get-DerInteger $p.Modulus))
+  $body.AddRange((Get-DerInteger $p.Exponent))
+  $body.AddRange((Get-DerInteger $p.D))
+  $body.AddRange((Get-DerInteger $p.P))
+  $body.AddRange((Get-DerInteger $p.Q))
+  $body.AddRange((Get-DerInteger $p.DP))
+  $body.AddRange((Get-DerInteger $p.DQ))
+  $body.AddRange((Get-DerInteger $p.InverseQ))
+  $out = New-Object System.Collections.Generic.List[byte]
+  $out.Add(0x30)
+  $out.AddRange((Get-DerLength $body.Count))
+  $out.AddRange($body)
+  return ,$out.ToArray()
+}
+
+function Get-PrivateKeyPem($rsa) {
+  # PowerShell 7 / .NET Core 有 PKCS#8 导出，直接用
+  if ($rsa.PSObject.Methods['ExportPkcs8PrivateKey']) {
+    return Wrap-Pem 'PRIVATE KEY' $rsa.ExportPkcs8PrivateKey()
+  }
+  # Windows PowerShell 5.1 / .NET Framework：手工编码 PKCS#1
+  return Wrap-Pem 'RSA PRIVATE KEY' (Get-Pkcs1Der $rsa)
+}
+
 Write-Host ""
 Write-Host "========== wx_video_downloader 环境检查 ==========" -ForegroundColor Cyan
 
@@ -91,7 +144,7 @@ if ($needGen) {
   $cert = $req.CreateSelfSigned([DateTimeOffset]::Now.AddDays(-1), [DateTimeOffset]::Now.AddYears(10))
 
   Set-Content -Path $certFile -Value (Wrap-Pem 'CERTIFICATE' $cert.RawData) -Encoding ascii
-  Set-Content -Path $keyFile -Value (Wrap-Pem 'PRIVATE KEY' $rsa.ExportPkcs8PrivateKey()) -Encoding ascii
+  Set-Content -Path $keyFile -Value (Get-PrivateKeyPem $rsa) -Encoding ascii
   Write-Ok "已生成 $certFile"
   Write-Ok "已生成 $keyFile"
 }
