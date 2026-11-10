@@ -1,0 +1,12 @@
+# 运行时产物
+work/
+flows.log
+mitm/
+certs/
+__pycache__/
+*.pyc
+
+# 下载的视频
+*.mp4
+*.m4a
+*.ts
