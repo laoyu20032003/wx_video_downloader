@@ -15,6 +15,7 @@ try {
   if (Test-Path $mitmPidFile) {
     $mp = [int](Get-Content $mitmPidFile -Raw)
     if ($mp) { taskkill /PID $mp /T /F 2>$null | Out-Null }
+    Remove-Item -LiteralPath $mitmPidFile -ErrorAction SilentlyContinue
   }
 }
 catch { }

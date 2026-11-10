@@ -37,7 +37,29 @@ public class MemScan
         return ((uint)b[o] << 24) | ((uint)b[o + 1] << 16) | ((uint)b[o + 2] << 8) | b[o + 3];
     }
 
-    // 在微信进程里找「解密后的 MP4 头」：ftyp 紧接 moov
+    static string FourCC(byte[] b, int o)
+    {
+        return "" + (char)b[o] + (char)b[o + 1] + (char)b[o + 2] + (char)b[o + 3];
+    }
+
+    // 合法的头：ftyp 之后最多再跨 3 个 box 就撞上 moov
+    // （有的片子是 ftyp + free + moov 或 ftyp + uuid + moov，只认紧挨着的那种会漏掉整条视频）
+    static bool MoovFollows(byte[] buf, int p)
+    {
+        for (int hop = 0; hop < 4; hop++)
+        {
+            if (p + 8 > buf.Length) return false;
+            uint sz = BE32(buf, p);
+            if (sz < 8 || sz > 32u * 1024 * 1024) return false;
+            string t = FourCC(buf, p + 4);
+            if (t == "moov") return true;
+            if (t != "free" && t != "wide" && t != "uuid" && t != "skip" && t != "styp" && t != "sidx") return false;
+            p += (int)sz;
+        }
+        return false;
+    }
+
+    // 在微信进程里找「解密后的 MP4 头」
     public static List<long> Scan(int pid, int maxResults)
     {
         var found = new List<long>();
@@ -70,9 +92,7 @@ public class MemScan
                         if (s1 < 16 || s1 > 512) continue;
                         int mo = i + (int)s1;
                         if (mo + 8 >= buf.Length) continue;
-                        if (buf[mo + 4] != (byte)'m' || buf[mo + 5] != (byte)'o' || buf[mo + 6] != (byte)'o' || buf[mo + 7] != (byte)'v') continue;
-                        uint s2 = BE32(buf, mo);
-                        if (s2 < 8 || s2 > 20u * 1024 * 1024) continue;
+                        if (!MoovFollows(buf, mo)) continue;
                         found.Add((long)addr + i);
                         if (found.Count >= maxResults) break;
                     }
