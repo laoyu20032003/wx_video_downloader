@@ -37,9 +37,10 @@ def response(flow: http.HTTPFlow):
             size = -1
 
     try:
+        rng = flow.request.headers.get("range", "")
         with open(LOG, "a", encoding="utf-8", errors="replace") as f:
-            f.write("%s\t%d\t%d\t%s\t%s\n" % (
+            f.write("%s\t%d\t%d\t%s\t%s\t%s\n" % (
                 time.strftime("%H:%M:%S"), flow.response.status_code, size,
-                flow.request.method, u))
+                flow.request.method, u, rng))
     except Exception:
         pass

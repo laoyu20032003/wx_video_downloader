@@ -23,7 +23,11 @@ param(
   [int]$Port = 8898,
   [string]$Upstream = "auto",
   [switch]$SelfTest,
-  [switch]$KeepProxy
+  [switch]$KeepProxy,
+  [switch]$NoAuto,
+  [switch]$Hud,
+  [string]$SaveUrl = "",
+  [string]$SaveTag = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -460,6 +464,20 @@ function Invoke-Fix([string]$url, [string]$tag) {
   return $null
 }
 
+# ---------- 4.5 单条保存（供 wx-hud 的 F8 调用；不启动 mitmproxy） ----------
+if ($SaveUrl) {
+  $t = if ($SaveTag) { $SaveTag } else { 'manual' }
+  $t = ($t -replace '[^0-9A-Za-z_-]', '')
+  if (-not $t) { $t = 'manual' }
+  $saved = Invoke-Fix $SaveUrl $t
+  if ($saved) {
+    Write-Output "SAVED=$saved"
+    exit 0
+  }
+  Write-Output "FAILED"
+  exit 2
+}
+
 # ---------- 5. 启动 mitmproxy（失败可换模式重来） ----------
 function Start-Mitm([string]$upstreamServer) {
   $mitmArgs = @('-q', '-p', "$Port", '--set', "confdir=$ConfDir", '-s', $CapturePy)
@@ -619,8 +637,16 @@ Write-Host " 输出目录 : $OutDir"
 Write-Host " 代理端口 : 127.0.0.1:$Port"
 Write-Host " 网络出口 : $(if($up.Server){"经上游 $($up.Server)"}else{'直连'})"
 Write-Host ""
-Write-Host " 第一次使用请：完全退出微信 → 重新打开 → 进入视频号播放视频" -ForegroundColor Yellow
-Write-Host " 之后每播放一条视频，会在十几秒内自动保存（同名视频只处理一次）"
+if ($NoAuto) {
+  if ($Hud) {
+    Write-Host " 监听 + HUD：悬停卡片 2～3 秒，按 F8 保存当前视频" -ForegroundColor Yellow
+  } else {
+    Write-Host " 监听模式：不自动下载。打开 wx-hud，悬停卡片后按 F8 保存当前视频" -ForegroundColor Yellow
+  }
+} else {
+  Write-Host " 第一次使用请：完全退出微信 → 重新打开 → 进入视频号播放视频" -ForegroundColor Yellow
+  Write-Host " 之后每播放一条视频，会在十几秒内自动保存（同名视频只处理一次）"
+}
 Write-Host " 停止：按 Ctrl+C，或直接关闭这个窗口（会自动还原系统代理）" -ForegroundColor Yellow
 Write-Host "========================================"
 Write-Host ""
@@ -638,6 +664,23 @@ if ($SelfTest) {
   return
 }
 
+# 可选：把 HUD 作为子进程拉起；退出时一并结束
+$hudProc = $null
+if ($Hud) {
+  $hudScript = Join-Path $Root 'wx-hud.ps1'
+  if (Test-Path -LiteralPath $hudScript) {
+    $hudExe = (Get-Process -Id $PID).Path
+    if (-not $hudExe) { $hudExe = 'pwsh' }
+    $hudProc = Start-Process -FilePath $hudExe -WindowStyle Hidden -PassThru -ArgumentList @(
+      '-Sta', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $hudScript, '-OutDir', $OutDir
+    )
+    Set-Content -Path (Join-Path $Work 'hud.pid') -Value $hudProc.Id -Encoding ascii
+    Write-Step "HUD 已启动 (pid $($hudProc.Id))"
+  } else {
+    Write-Warn "找不到 $hudScript，HUD 未启动"
+  }
+}
+
 # 待处理队列：tag -> { Url, Attempts, NextTry }；失败会重试，不会一次失败就永久放弃
 $jobs = @{}
 $processed = @{}
@@ -646,6 +689,8 @@ $maxAttempts = 3
 
 try {
   while ($true) {
+    if ($NoAuto) { Start-Sleep -Seconds 2; continue }
+
     # 1) 先消化待处理队列（一轮只干一件，避免同时扫内存）
     $now = Get-Date
     $dueTag = $null
@@ -712,6 +757,10 @@ try {
 finally {
   Write-Host ""
   Write-Step "退出，还原系统代理 ..."
+  if ($hudProc -and -not $hudProc.HasExited) {
+    Stop-Process -Id $hudProc.Id -Force -ErrorAction SilentlyContinue
+  }
+  Remove-Item -LiteralPath (Join-Path $Work 'hud.pid') -ErrorAction SilentlyContinue
   if (-not $KeepProxy) { Restore-SystemProxy $snap }
   if ($mitmProc -and -not $mitmProc.HasExited) { Stop-MitmTree $mitmProc.Id }
   Remove-Item -LiteralPath $pidFile -ErrorAction SilentlyContinue

@@ -17,6 +17,14 @@ try {
     if ($mp) { taskkill /PID $mp /T /F 2>$null | Out-Null }
     Remove-Item -LiteralPath $mitmPidFile -ErrorAction SilentlyContinue
   }
+
+  # 主进程被强杀时，HUD 子进程也要一并结束
+  $hudPidFile = Join-Path (Split-Path $Snapshot -Parent) 'hud.pid'
+  if (Test-Path $hudPidFile) {
+    $hp = [int](Get-Content $hudPidFile -Raw)
+    if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $hudPidFile -ErrorAction SilentlyContinue
+  }
 }
 catch { }
 
