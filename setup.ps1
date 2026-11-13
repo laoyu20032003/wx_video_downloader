@@ -109,7 +109,7 @@ $mitm = Get-Command mitmdump -ErrorAction SilentlyContinue
 if (-not $mitm) {
   $cands = @(
     (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python312\Scripts\mitmdump.exe'),
-    (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\Scripts\mitmdump.exe'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\Scripts\mitmdump.exe')
     
   )
   foreach ($c in $cands) { if (Test-Path $c) { $mitm = Get-Item $c; break } }
