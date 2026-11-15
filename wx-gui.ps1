@@ -135,12 +135,12 @@ $coverDir = Join-Path $Work 'covers'
 New-Item -ItemType Directory -Force -Path $coverDir | Out-Null
 $placeholderPath = Join-Path $coverDir '_placeholder.png'
 if (-not (Test-Path -LiteralPath $placeholderPath)) {
-  $bmp = New-Object System.Drawing.Bitmap(192, 108)
+  $bmp = New-Object System.Drawing.Bitmap(180, 320)
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $g.Clear([System.Drawing.Color]::FromArgb(45, 45, 48))
-  $font = New-Object System.Drawing.Font('Microsoft YaHei UI', 14)
+  $font = New-Object System.Drawing.Font('Microsoft YaHei UI', 16)
   $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(120, 120, 120))
-  $g.DrawString('视频号', $font, $brush, 55, 40)
+  $g.DrawString('视频号', $font, $brush, 48, 145)
   $bmp.Save($placeholderPath, [System.Drawing.Imaging.ImageFormat]::Png)
   $g.Dispose(); $bmp.Dispose()
 }
@@ -167,9 +167,6 @@ $script:UiLogLines = New-Object System.Collections.Generic.List[string]
 $script:PendingFile = Join-Path $Work 'pending.json'
 $script:PendingIds = @{}
 $script:LibraryStamp = [DateTime]::MinValue
-$script:PlayerFile = Join-Path $Work 'player.json'
-$script:PlayerNow = $null
-$script:PlayerStamp = [DateTime]::MinValue
 
 function Write-GuiLog([string]$msg) {
   try { Add-Content -LiteralPath $script:GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -Encoding utf8 } catch { }
@@ -593,7 +590,7 @@ function Invoke-RowAction($row, [switch]$Auto) {
 $window = New-Object System.Windows.Window
 $window.Title = '视频号视频库'
 $window.Width = 1180
-$window.Height = 760
+$window.Height = 820
 $window.MinWidth = 900
 $window.MinHeight = 480
 $window.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(255, 30, 30, 30))
@@ -642,7 +639,6 @@ $refreshBtn.Margin = New-Object System.Windows.Thickness(18, 0, 0, 0)
 $refreshBtn.Padding = New-Object System.Windows.Thickness(12, 4, 12, 4)
 $refreshBtn.Add_Click({
   $script:LibraryStamp = [DateTime]::MinValue
-  Update-PlayerNow
   Sync-Library
   Update-Count
   Write-GuiLog 'manual-sync'
@@ -656,29 +652,22 @@ $openBtn.Padding = New-Object System.Windows.Thickness(12, 4, 12, 4)
 $openBtn.Add_Click({ if (Test-Path -LiteralPath $OutDir) { Start-Process explorer.exe $OutDir } })
 $top.Children.Add($openBtn) | Out-Null
 
-$playBlock = New-Object System.Windows.Controls.TextBlock
-$playBlock.Foreground = $grey
-$playBlock.VerticalAlignment = 'Center'
-$playBlock.Margin = New-Object System.Windows.Thickness(18, 3, 0, 0)
-$playBlock.MaxWidth = 300
-$playBlock.TextTrimming = 'CharacterEllipsis'
-$playBlock.Text = '当前播放：—'
-$top.Children.Add($playBlock) | Out-Null
+$clearBtn = New-Object System.Windows.Controls.Button
+$clearBtn.Content = '清除缓存'
+$clearBtn.ToolTip = '清空列表/封面/索引/待重播，不删除输出目录里的视频'
+$clearBtn.Margin = New-Object System.Windows.Thickness(8, 0, 0, 0)
+$clearBtn.Padding = New-Object System.Windows.Thickness(10, 4, 10, 4)
+$clearBtn.Add_Click({ Clear-Cache })
+$top.Children.Add($clearBtn) | Out-Null
 
-$bindBtn = New-Object System.Windows.Controls.Button
-$bindBtn.Content = '绑定当前播放'
-$bindBtn.Margin = New-Object System.Windows.Thickness(8, 0, 0, 0)
-$bindBtn.Padding = New-Object System.Windows.Thickness(10, 4, 10, 4)
-$bindBtn.Add_Click({ Bind-PlayerToSelected })
-$top.Children.Add($bindBtn) | Out-Null
 
 $ns = 'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'
 $headerXaml = @"
 <Grid $ns Background="#252526" Height="34">
   <Grid.ColumnDefinitions>
-    <ColumnDefinition Width="118"/>
     <ColumnDefinition Width="90"/>
-    <ColumnDefinition Width="380"/>
+    <ColumnDefinition Width="90"/>
+    <ColumnDefinition Width="408"/>
     <ColumnDefinition Width="70"/>
     <ColumnDefinition Width="90"/>
     <ColumnDefinition Width="110"/>
@@ -699,19 +688,19 @@ $header = [System.Windows.Markup.XamlReader]::Parse($headerXaml)
 
 $rowXaml = @"
 <DataTemplate $ns>
-  <Grid Height="66" Margin="0,1">
+  <Grid Height="124" Margin="0,1">
     <Grid.ColumnDefinitions>
-      <ColumnDefinition Width="118"/>
       <ColumnDefinition Width="90"/>
-      <ColumnDefinition Width="380"/>
+      <ColumnDefinition Width="90"/>
+      <ColumnDefinition Width="408"/>
       <ColumnDefinition Width="70"/>
       <ColumnDefinition Width="90"/>
       <ColumnDefinition Width="110"/>
       <ColumnDefinition Width="90"/>
       <ColumnDefinition Width="100"/>
     </Grid.ColumnDefinitions>
-    <Border Grid.Column="0" Width="100" Height="58" Background="#37373A" CornerRadius="4" ClipToBounds="True" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="8,0,0,0">
-      <Image Source="{Binding CoverImage}" Width="96" Height="54" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    <Border Grid.Column="0" Width="68" Height="118" Background="#37373A" CornerRadius="4" ClipToBounds="True" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="8,0,0,0">
+      <Image Source="{Binding CoverImage}" Width="64" Height="114" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
     <TextBlock Grid.Column="1" Text="{Binding ShortId}" Foreground="#8A8A8A" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center" ToolTip="{Binding Id}"/>
     <TextBlock Grid.Column="2" Text="{Binding Title}" Foreground="#E8E8E8" VerticalAlignment="Center" Margin="8,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
@@ -838,62 +827,56 @@ function Show-RowDetails($row) {
   ) -join "`r`n"
 }
 
-function Update-PlayerNow {
-  if (-not (Test-Path -LiteralPath $script:PlayerFile)) { return }
-  try { $stamp = (Get-Item -LiteralPath $script:PlayerFile).LastWriteTimeUtc } catch { return }
-  if ($stamp -eq $script:PlayerStamp) { return }
-  $script:PlayerStamp = $stamp
-  try { $p = Get-Content -LiteralPath $script:PlayerFile -Raw | ConvertFrom-Json } catch { return }
-  $script:PlayerNow = $p
-  $t = [string]$p.title
-  if ($t.Length -gt 36) { $t = $t.Substring(0, 36) + '…' }
-  $playBlock.Text = "当前播放：$t"
-}
+function Clear-Cache {
+  if ($script:Jobs.Count -gt 0) {
+    [System.Windows.MessageBox]::Show('还有下载/校验任务在进行，等它结束再清除缓存。', '视频号视频库') | Out-Null
+    return
+  }
+  $answer = [System.Windows.MessageBox]::Show(
+    "清空列表、封面、明文头缓存、下载索引和待重播记录？`n`n不会删除输出目录里的视频。",
+    '清除缓存', 'YesNo', 'Warning')
+  if ($answer -ne 'Yes') { return }
 
-function Bind-PlayerToSelected {
-  $row = $list.SelectedItem
-  if (-not $row) {
-    [System.Windows.MessageBox]::Show('先在列表里选中一条，再点“绑定当前播放”。', '视频号视频库') | Out-Null
-    return
+  # 先通知 HUD 清空它内存里的 Library/Index，再删文件
+  $flag = Join-Path $Work 'clear.flag'
+  try { Set-Content -LiteralPath $flag -Value (Get-Date).ToString('o') -Encoding utf8 } catch { }
+  $deadline = (Get-Date).AddSeconds(3)
+  while ((Test-Path -LiteralPath $flag) -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 100
   }
-  $p = $script:PlayerNow
-  if (-not $p -or -not $p.title) {
-    [System.Windows.MessageBox]::Show('还没有读到播放器标题；请先在播放窗口播放一条视频。', '视频号视频库') | Out-Null
-    return
+  Remove-Item -LiteralPath $flag -ErrorAction SilentlyContinue
+
+  $rows.Clear()
+  $script:PendingIds = @{}
+  $script:AutoAttempted = @{}
+  $script:LibraryStamp = [DateTime]::MinValue
+  $script:UiLogLines.Clear()
+  $detailsBox.Text = ''
+  $logBox.Text = ''
+
+  $files = @(
+    $LibraryFile,
+    $script:PendingFile,
+    (Join-Path $Work 'player.json'),
+    $IndexFile,
+    (Join-Path $Work 'gui.log'),
+    (Join-Path $Work 'hud.log'),
+    (Join-Path $Work 'run.log'),
+    (Join-Path $Work 'hdr_dump.tmp'),
+    (Join-Path $Work 'err.txt')
+  )
+  foreach ($f in $files) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+  Get-ChildItem -LiteralPath (Join-Path $Work 'covers') -File -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+  Get-ChildItem -LiteralPath (Join-Path $Work 'headers') -Directory -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  foreach ($pat in 'cipher_*', 'cand_*', 'prefix_*', 'gui_save_*', '*.tmp') {
+    Get-ChildItem -LiteralPath $Work -Filter $pat -File -ErrorAction SilentlyContinue |
+      Remove-Item -Force -ErrorAction SilentlyContinue
   }
-  $t = [string]$p.title
-  $d = [string]$p.duration
-  try {
-    $j = Get-Content -LiteralPath $LibraryFile -Raw | ConvertFrom-Json
-    $entries = @($j.entries)
-    $found = $false
-    foreach ($e in $entries) {
-      if ([string]$e.id -eq $row.Id) {
-        $e | Add-Member -NotePropertyName title -NotePropertyValue $t -Force
-        $e | Add-Member -NotePropertyName duration -NotePropertyValue $d -Force
-        $e | Add-Member -NotePropertyName source -NotePropertyValue 'manual' -Force
-        $e | Add-Member -NotePropertyName updated -NotePropertyValue ((Get-Date).ToString('o')) -Force
-        $coverPath = [string]$p.cover
-        if ($coverPath -and (Test-Path -LiteralPath $coverPath)) {
-          $e | Add-Member -NotePropertyName cover -NotePropertyValue $coverPath -Force
-        }
-        $found = $true
-      }
-    }
-    if ($found) {
-      $tmp = $LibraryFile + '.tmp'
-      [pscustomobject]@{ updated = (Get-Date).ToString('o'); entries = $entries } |
-        ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tmp -Encoding utf8
-      Move-Item -LiteralPath $tmp -Destination $LibraryFile -Force
-      $row.Title = $t
-      $row.Duration = $d
-      if ($coverPath -and (Test-Path -LiteralPath $coverPath)) {
-        $img = Load-Bitmap $coverPath
-        if ($img) { $row.CoverImage = $img }
-      }
-      Write-GuiLog ("manual-bind id=$($row.Id) title=$t")
-    }
-  } catch { }
+
+  Update-Count
+  Write-GuiLog 'cache-cleared (output videos preserved)'
 }
 
 $list.Add_SelectionChanged({
@@ -978,7 +961,6 @@ function Check-Pending {
 $timer.Add_Tick({
   Update-ListenerStatus
   Update-Count
-  Update-PlayerNow
   Sync-Library
   Start-AutoDownload
   Check-Pending
