@@ -460,6 +460,7 @@ function Shorten([string]$s, [int]$n) {
 
 $script:LibraryFile = Join-Path $PSScriptRoot 'work\library.json'
 $script:Library = @{}
+$script:noLibraryMerge = $false
 
 function Load-Library {
   $script:Library = @{}
@@ -478,12 +479,45 @@ function Load-Library {
       }
       $script:Library[[string]$e.id] = $e
     }
-    if ($dirty) { Save-Library }
+    if ($dirty) {
+      $script:noLibraryMerge = $true
+      Save-Library
+      $script:noLibraryMerge = $false
+    }
   } catch { }
 }
 
 function Save-Library {
   try {
+    # HUD 和 GUI 都会写 library.json；写之前把磁盘上更新的 title/cover/file 合并回来，
+    # 避免 HUD 用旧内存状态把 GUI 刚写好的标题覆盖掉。
+    if (-not $script:noLibraryMerge -and (Test-Path -LiteralPath $script:LibraryFile)) {
+      try {
+        $disk = Get-Content -LiteralPath $script:LibraryFile -Raw | ConvertFrom-Json
+        foreach ($de in @($disk.entries)) {
+          if (-not $de -or -not $de.id) { continue }
+          $id = [string]$de.id
+          if (-not $script:Library.ContainsKey($id)) {
+            $script:Library[$id] = $de
+            continue
+          }
+          $mem = $script:Library[$id]
+          $du = [DateTime]::MinValue
+          $mu = [DateTime]::MinValue
+          if ($de.updated) { try { $du = [DateTime]::Parse([string]$de.updated, [Globalization.CultureInfo]::InvariantCulture) } catch { } }
+          if ($mem.updated) { try { $mu = [DateTime]::Parse([string]$mem.updated, [Globalization.CultureInfo]::InvariantCulture) } catch { } }
+          foreach ($field in @('title', 'cover', 'file', 'source', 'firstSeen')) {
+            $dv = $de.PSObject.Properties[$field]
+            if (-not $dv -or [string]::IsNullOrWhiteSpace([string]$dv.Value)) { continue }
+            $mv = $mem.PSObject.Properties[$field]
+            $mval = if ($mv) { [string]$mv.Value } else { '' }
+            if (-not $mval -or ($du -gt $mu -and [string]$dv.Value -ne $mval)) {
+              $mem | Add-Member -NotePropertyName $field -NotePropertyValue $dv.Value -Force
+            }
+          }
+        }
+      } catch { }
+    }
     $dir = Split-Path -Parent $script:LibraryFile
     if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     $tmp = $script:LibraryFile + '.tmp'
@@ -1050,8 +1084,16 @@ function Update-Hud {
 
     $clearFlag = Join-Path $PSScriptRoot 'work\clear.flag'
     if (Test-Path -LiteralPath $clearFlag) {
+      if ($script:saving -and $script:saveProc) {
+        try { Stop-Process -Id $script:saveProc.Id -Force -ErrorAction SilentlyContinue } catch { }
+      }
+      $script:saving = $false
+      $script:saveProc = $null
+      $script:noLibraryMerge = $true
       $script:Library = @{}
+      Remove-Item -LiteralPath $script:LibraryFile -ErrorAction SilentlyContinue
       Save-Library
+      $script:noLibraryMerge = $false
       $script:index = @{}
       Save-Index
       $script:recentMedia.Clear()

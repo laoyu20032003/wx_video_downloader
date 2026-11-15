@@ -493,7 +493,7 @@ function Sync-Library {
       $row = $byId[$id]
       if ($row.Pending -or $row.StatusText -eq '下载中…') { continue }
       $fresh = New-Row $e '（无标题）'
-      $row.Title = $fresh.Title
+      if ($fresh.Title -and $fresh.Title -notlike '（无标题）*') { $row.Title = $fresh.Title }
       $row.Duration = $fresh.Duration
       $row.SizeText = $fresh.SizeText
       $row.Resolution = $fresh.Resolution
@@ -542,7 +542,9 @@ function Save-LibraryPatch($row) {
     }
     $e = if ($entries.ContainsKey($row.Id)) { $entries[$row.Id] } else { [pscustomobject]@{} }
     $e | Add-Member -NotePropertyName id -NotePropertyValue $row.Id -Force
-    if ($row.Title) { $e | Add-Member -NotePropertyName title -NotePropertyValue $row.Title -Force }
+    if ($row.Title -and $row.Title -notlike '（无标题）*') {
+      $e | Add-Member -NotePropertyName title -NotePropertyValue $row.Title -Force
+    }
     if ($row.Duration -and $row.Duration -ne '—') {
       $e | Add-Member -NotePropertyName duration -NotePropertyValue $row.Duration -Force
     }
@@ -552,6 +554,22 @@ function Save-LibraryPatch($row) {
     if ($row.Source) { $e | Add-Member -NotePropertyName source -NotePropertyValue $row.Source -Force }
     $e | Add-Member -NotePropertyName updated -NotePropertyValue ((Get-Date).ToString('o')) -Force
     $entries[$row.Id] = $e
+
+    # 第二次读取磁盘，合并 HUD 在这期间新增/更新的其他条目
+    if (Test-Path -LiteralPath $LibraryFile) {
+      try {
+        $latest = Get-Content -LiteralPath $LibraryFile -Raw | ConvertFrom-Json
+        foreach ($le in @($latest.entries)) {
+          if (-not $le.id -or [string]$le.id -eq $row.Id) { continue }
+          $lid = [string]$le.id
+          if (-not $entries.ContainsKey($lid)) { $entries[$lid] = $le; continue }
+          $lu = [DateTime]::MinValue; $ou = [DateTime]::MinValue
+          if ($le.updated) { try { $lu = [DateTime]::Parse([string]$le.updated, [Globalization.CultureInfo]::InvariantCulture) } catch { } }
+          if ($entries[$lid].updated) { try { $ou = [DateTime]::Parse([string]$entries[$lid].updated, [Globalization.CultureInfo]::InvariantCulture) } catch { } }
+          if ($lu -gt $ou) { $entries[$lid] = $le }
+        }
+      } catch { }
+    }
     $tmp = $LibraryFile + '.tmp'
     [pscustomobject]@{ updated = (Get-Date).ToString('o'); entries = @($entries.Values) } |
       ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tmp -Encoding utf8
@@ -867,14 +885,17 @@ function Show-RowDetails($row) {
 }
 
 function Clear-Cache {
-  if ($script:Jobs.Count -gt 0) {
-    [System.Windows.MessageBox]::Show('还有下载/校验任务在进行，等它结束再清除缓存。', '视频号视频库') | Out-Null
-    return
-  }
-  $answer = [System.Windows.MessageBox]::Show(
-    "清空列表、封面、明文头缓存、下载索引和待重播记录？`n`n不会删除输出目录里的视频。",
-    '清除缓存', 'YesNo', 'Warning')
+  $busy = $script:Jobs.Count -gt 0
+  $msg = "清空列表、封面、明文头缓存、下载索引和待重播记录？`n`n不会删除输出目录里的视频。"
+  if ($busy) { $msg += "`n`n当前有下载/校验任务，清除会先强制停止它们。" }
+  $answer = [System.Windows.MessageBox]::Show($msg, '清除缓存', 'YesNo', 'Warning')
   if ($answer -ne 'Yes') { return }
+
+  # 用户确认后停止所有下载任务，并清空任务表
+  foreach ($job in @($script:Jobs.Values)) {
+    try { Stop-Process -Id $job.Proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+  }
+  $script:Jobs = @{}
 
   # 先通知 HUD 清空它内存里的 Library/Index，再删文件
   $flag = Join-Path $Work 'clear.flag'
