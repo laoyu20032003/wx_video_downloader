@@ -630,24 +630,47 @@ function Update-PlayedLibrary($card, $playerInfo) {
     $key = $cap + '|' + $dur
     $isNew = $key -and ($script:lastPlayerKey -eq '' -or $key -ne $script:lastPlayerKey)
     if ($isNew) {
-      $pool = @($cands | Where-Object { $_.First -and ($now - $_.First).TotalSeconds -le 12 })
-      if ($pool.Count -eq 0) { $pool = $cands }
-      $withM = @($pool | Where-Object { $_.HasM })
-      if ($withM.Count -gt 0) { $pool = $withM }
-      # 当前播放通常下载得最多；预加载通常还未开始时/数据更少
-      $pick = @($pool | Sort-Object -Property @{ Expression = { $_.MaxEnd }; Descending = $true },
-        @{ Expression = { $_.First }; Descending = $true } | Select-Object -First 1)
-      if ($pick.Count -gt 0) {
-        $pid2 = [string]$pick[0].M
+      $capSec = ConvertTo-Seconds $dur
+      $known = @($script:Library.Values | Where-Object {
+          $_.source -eq 'card' -and $_.title -and $_.title.Trim() -eq $cap.Trim() -and
+          (ConvertTo-Seconds ([string]$_.duration)) -eq $capSec
+        })
+      $mapped = $false
+      if ($known.Count -eq 1) {
+        $pid2 = [string]$known[0].id
+        $match = @($cands | Where-Object { [string]$_.M -eq $pid2 } | Select-Object -First 1)
+        $url = if ($match.Count -gt 0) { $match[0].Url } else { [string]$known[0].url }
         $script:currentMediaId = $pid2
-        $msize = Get-MediaSize $pick[0].Url
-        $mstatus = if ($msize -gt 0) { 'available' } else { 'played' }
-        Update-LibraryEntry @{
-          id = $pid2; title = $cap; duration = $dur; url = $pick[0].Url
-          cover = (Save-PlayerCover $playerInfo $pid2)
-          size = $msize; status = $mstatus
+        $fields = @{ id = $pid2; title = $cap; duration = $dur; url = $url }
+        if (-not $known[0].cover -and $playerInfo) { $fields.cover = Save-PlayerCover $playerInfo $pid2 }
+        if ($match.Count -gt 0) {
+          $msize = Get-MediaSize $url
+          if ($msize -gt 0) { $fields.size = $msize }
         }
-        Write-HudLog ("player-map id=$pid2 dur=$dur title=$($cap.Substring(0, [Math]::Min(30, $cap.Length)))")
+        Update-LibraryEntry $fields
+        Write-HudLog ("player-map-card id=$pid2 dur=$dur")
+        $mapped = $true
+      }
+      if (-not $mapped) {
+        $pool = @($cands | Where-Object { $_.First -and ($now - $_.First).TotalSeconds -le 12 })
+        if ($pool.Count -eq 0) { $pool = $cands }
+        $withM = @($pool | Where-Object { $_.HasM })
+        if ($withM.Count -gt 0) { $pool = $withM }
+        # 当前播放通常下载得最多；预加载通常还未开始时/数据更少
+        $pick = @($pool | Sort-Object -Property @{ Expression = { $_.MaxEnd }; Descending = $true },
+          @{ Expression = { $_.First }; Descending = $true } | Select-Object -First 1)
+        if ($pick.Count -gt 0) {
+          $pid2 = [string]$pick[0].M
+          $script:currentMediaId = $pid2
+          $msize = Get-MediaSize $pick[0].Url
+          $mstatus = if ($msize -gt 0) { 'available' } else { 'played' }
+          Update-LibraryEntry @{
+            id = $pid2; title = $cap; duration = $dur; url = $pick[0].Url
+            cover = (Save-PlayerCover $playerInfo $pid2)
+            size = $msize; status = $mstatus; source = 'player'
+          }
+          Write-HudLog ("player-map id=$pid2 dur=$dur title=$($cap.Substring(0, [Math]::Min(30, $cap.Length)))")
+        }
       }
       $script:lastPlayerKey = $key
     }
@@ -699,7 +722,7 @@ function Update-PlayedLibrary($card, $playerInfo) {
     $status = if ($size -gt 0) { 'available' } else { 'played' }
     Update-LibraryEntry @{
       id = $id; title = $title; duration = $dur; url = $c.Url; cover = $cover
-      size = $size; width = 0; height = 0; status = $status
+      size = $size; width = 0; height = 0; status = $status; source = 'player'
     }
     Write-HudLog ("library-auto id=$id card=$([bool]$card) player=$([bool]$playerInfo) size=$size")
   }
@@ -1191,6 +1214,7 @@ function Update-Hud {
             width = $fw
             height = $fh
             status = $status
+            source = 'card'
           }
           if ($idx -and $idx.file) { $fields.file = $idx.file }
           Update-LibraryEntry $fields
