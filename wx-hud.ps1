@@ -1103,12 +1103,22 @@ function Update-Hud {
       [void][HudNative]::GetCursorPos([ref]$pt)
     }
     $card = Get-CardHit $script:cards $pt.X $pt.Y
+    $usedFallback = $false
+    if (-not $card -and $script:lastCard -and ((Get-Date) - $script:lastCardTime).TotalSeconds -lt 3) {
+      # 悬停预览可能盖住卡片，UIA 暂时不再把光标判为命中；
+      # 只要光标还停在这张卡原来的位置，就继续计时。
+      if ($script:lastCard.Rect.Contains($pt.X, $pt.Y)) {
+        $card = $script:lastCard
+        $usedFallback = $true
+      }
+    }
     $hitCard = $card
     if ($hitCard) {
       $ckey = Get-CardKey $hitCard
       if ($ckey -ne $script:hoverKey) {
         $script:hoverKey = $ckey
         $script:hoverStart = Get-Date
+        Write-HudLog ("hover-start key=$ckey fallback=$usedFallback")
       }
       $hoverAge = ((Get-Date) - $script:hoverStart).TotalSeconds
       $needBind = ($hoverAge -ge $HoverDwellSeconds) -and (-not $script:cardMedia.ContainsKey($ckey))
@@ -1116,6 +1126,7 @@ function Update-Hud {
         $needBind = ((Get-Date) - $script:cardMedia[$ckey].Time).TotalSeconds -gt 60
       }
       if ($needBind) {
+        Write-HudLog ("hover-dwell key=$ckey age=$([math]::Round($hoverAge,1)) fallback=$usedFallback")
         $hits = @(Get-MediaCandidates 5 |
           Where-Object { $_.First -ge $script:hoverStart.AddSeconds(-0.3) } |
           Sort-Object -Property First)
@@ -1126,7 +1137,7 @@ function Update-Hud {
           Write-HudLog ("bind card=$ckey m=$($hits[0].M)")
 
           # 记录到视频库：封面截图 + 标题/时长/URL/大小/分辨率/状态
-          $coverPath = Save-CardCover $hitCard $hits[0].M
+          $coverPath = if ($usedFallback) { $null } else { Save-CardCover $hitCard $hits[0].M }
           $size = Get-MediaSize $hits[0].Url
           $idx = Get-IndexedEntry $hitCard $null
           $status = if ($idx) { 'downloaded' } elseif ($size -gt 0) { 'available' } else { 'needs-replay' }
