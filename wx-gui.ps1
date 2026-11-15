@@ -30,7 +30,7 @@ using System;
 using System.ComponentModel;
 using System.Windows.Media;
 public class WxVideoRow : INotifyPropertyChanged {
-  private string _id, _shortId, _title, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated, _source, _coverPath, _firstSeen;
+  private string _id, _shortId, _title, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated, _source, _coverPath;
   private Brush _statusBrush;
   private ImageSource _coverImage;
   private bool _pending, _canAct;
@@ -51,7 +51,6 @@ public class WxVideoRow : INotifyPropertyChanged {
   public string Updated { get { return _updated; } set { if (_updated != value) { _updated = value; Raise("Updated"); } } }
   public string Source { get { return _source; } set { if (_source != value) { _source = value; Raise("Source"); } } }
   public string CoverPath { get { return _coverPath; } set { if (_coverPath != value) { _coverPath = value; Raise("CoverPath"); } } }
-  public string FirstSeen { get { return _firstSeen; } set { if (_firstSeen != value) { _firstSeen = value; Raise("FirstSeen"); } } }
   public bool Pending { get { return _pending; } set { if (_pending != value) { _pending = value; Raise("Pending"); } } }
   public DateTime PendingAt { get { return _pendingAt; } set { _pendingAt = value; Raise("PendingAt"); } }
   public bool CanAct { get { return _canAct; } set { if (_canAct != value) { _canAct = value; Raise("CanAct"); } } }
@@ -106,40 +105,6 @@ function Get-VideoCover([string]$file, [string]$id) {
     if (Test-Path -LiteralPath $path) { return $path }
   } catch { }
   return $null
-}
-
-function Get-TitleFromHistory($row, [int]$seconds) {
-  if ($seconds -le 0) { return '' }
-  $file = Join-Path $Work 'player_history.jsonl'
-  if (-not (Test-Path -LiteralPath $file)) { return '' }
-  $matches = @()
-  foreach ($line in (Get-Content -LiteralPath $file -ErrorAction SilentlyContinue)) {
-    if (-not $line) { continue }
-    try {
-      $s = $line | ConvertFrom-Json
-      if (-not $s.title) { continue }
-      if ([int]$s.seconds -le 0) { continue }
-      if ([Math]::Abs([int]$s.seconds - $seconds) -gt 2) { continue }
-      $t = [DateTime]::MinValue
-      try { $t = [DateTime]::Parse([string]$s.time, [Globalization.CultureInfo]::InvariantCulture) } catch { }
-      $matches += [pscustomobject]@{ Title = [string]$s.title; Time = $t }
-    } catch { }
-  }
-  if ($matches.Count -eq 0) { return '' }
-  $titles = @($matches | Group-Object -Property Title)
-  if ($titles.Count -eq 1) { return $titles[0].Name }
-
-  $first = [DateTime]::MinValue
-  if ($row.FirstSeen) {
-    try { $first = [DateTime]::Parse([string]$row.FirstSeen, [Globalization.CultureInfo]::InvariantCulture) } catch { }
-  }
-  if ($first -gt [DateTime]::MinValue) {
-    $best = @($matches | Where-Object { $_.Time -gt [DateTime]::MinValue } |
-      Sort-Object -Property @{ Expression = { [Math]::Abs(($_.Time - $first).TotalSeconds) }; Ascending = $true } |
-      Select-Object -First 1)
-    if ($best.Count -gt 0) { return $best[0].Title }
-  }
-  return $matches[-1].Title
 }
 
 function Get-VideoInfo([string]$file) {
@@ -202,7 +167,6 @@ $script:UiLogLines = New-Object System.Collections.Generic.List[string]
 $script:PendingFile = Join-Path $Work 'pending.json'
 $script:PendingIds = @{}
 $script:LibraryStamp = [DateTime]::MinValue
-$script:HistoryStamp = [DateTime]::MinValue
 
 function Write-GuiLog([string]$msg) {
   try { Add-Content -LiteralPath $script:GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -Encoding utf8 } catch { }
@@ -402,7 +366,6 @@ function New-Row($entry, [string]$fallbackTitle) {
   $row.CoverImage = $cover
   $row.CoverPath = [string]$entry.cover
   $row.Source = [string]$entry.source
-  $row.FirstSeen = [string]$entry.firstSeen
   $row.Updated = [string]$entry.updated
   $row.Pending = $false
   if (-not $exists -and $script:PendingIds.ContainsKey($row.Id)) {
@@ -503,7 +466,6 @@ function Sync-Library {
         $row.CoverPath = $fresh.CoverPath
       }
       $row.Source = $fresh.Source
-      $row.FirstSeen = $fresh.FirstSeen
       if ($fresh.File -or -not $row.File) {
         $row.File = $fresh.File
         $row.StatusText = $fresh.StatusText
@@ -910,7 +872,6 @@ function Clear-Cache {
   $script:PendingIds = @{}
   $script:AutoAttempted = @{}
   $script:LibraryStamp = [DateTime]::MinValue
-  $script:HistoryStamp = [DateTime]::MinValue
   $script:UiLogLines.Clear()
   $detailsBox.Text = ''
   $logBox.Text = ''
@@ -939,32 +900,6 @@ function Clear-Cache {
 
   Update-Count
   Write-GuiLog 'cache-cleared (output videos preserved)'
-}
-
-function Backfill-Titles {
-  $file = Join-Path $Work 'player_history.jsonl'
-  if (-not (Test-Path -LiteralPath $file)) { return }
-  try { $stamp = (Get-Item -LiteralPath $file).LastWriteTimeUtc } catch { return }
-  if ($stamp -eq $script:HistoryStamp) { return }
-  $script:HistoryStamp = $stamp
-  Write-GuiLog ("backfill-check rows=$($rows.Count) stamp=$stamp")
-  foreach ($row in @($rows)) {
-    if ($row.File -and (-not $row.Title -or $row.Title -like '（无标题）*')) {
-      $sec = Convert-DurationText $row.Duration
-      try {
-        $t = Get-TitleFromHistory $row $sec
-        Write-GuiLog ("backfill-row id=$($row.Id) sec=$sec title=$t")
-        if ($t) {
-          $row.Title = $t
-          $row.Source = 'history'
-          Save-LibraryPatch $row
-          Write-GuiLog ("title-backfill id=$($row.Id) title=$t")
-        }
-      } catch {
-        Write-GuiLog ("backfill-error id=$($row.Id) " + $_.Exception.Message)
-      }
-    }
-  }
 }
 
 $list.Add_SelectionChanged({
@@ -1050,7 +985,6 @@ $timer.Add_Tick({
   Update-ListenerStatus
   Update-Count
   Sync-Library
-  Backfill-Titles
   Start-AutoDownload
   Check-Pending
   foreach ($id in @($script:Jobs.Keys)) {
@@ -1083,14 +1017,6 @@ $timer.Add_Tick({
         Write-GuiLog ("download-duration-warning id=$($job.Row.Id) expected=${expected}s actual=${actual}s file=$saved")
       }
       if ($actual -gt 0) { $job.Row.Duration = Format-DurationSeconds $actual }
-      if ((-not $job.Row.Title -or $job.Row.Title -like '（无标题）*') -and $actual -gt 0) {
-        $histTitle = Get-TitleFromHistory $job.Row $actual
-        if ($histTitle) {
-          $job.Row.Title = $histTitle
-          $job.Row.Source = 'history'
-          Write-GuiLog ("title-from-history id=$($job.Row.Id) seconds=$actual title=$histTitle")
-        }
-      }
       $job.Row.File = $saved
       $job.Row.StatusText = '下载完成'
       $job.Row.StatusBrush = $green

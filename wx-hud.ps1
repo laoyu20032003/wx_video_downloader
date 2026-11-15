@@ -586,85 +586,6 @@ function Get-VideoInfo([string]$file) {
   } catch { return $null }
 }
 
-$script:playerInfoCache = $null
-$script:playerInfoAt = [DateTime]::MinValue
-function Get-PlayerInfo {
-  $now = Get-Date
-  if (($now - $script:playerInfoAt).TotalSeconds -lt 1.5) { return $script:playerInfoCache }
-  $script:playerInfoAt = $now
-  $result = $null
-  $results = @()
-  $fg = [HudNative]::GetForegroundWindow()
-  try {
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
-      [System.Windows.Automation.Condition]::TrueCondition)
-    $textCond = New-Object System.Windows.Automation.PropertyCondition(
-      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-      [System.Windows.Automation.ControlType]::Text)
-    foreach ($w in $wins) {
-      try {
-        $wpid = $w.Current.ProcessId
-        $proc = Get-Process -Id $wpid -ErrorAction SilentlyContinue
-        if (-not $proc -or @('Weixin', 'WeChatAppEx') -notcontains $proc.ProcessName) { continue }
-        $rect = $w.Current.BoundingRectangle
-        if ($rect.Width -lt 300 -or $rect.Height -lt 200) { continue }
-        $texts = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond)
-        $dur = ''; $secs = 0; $desc = ''
-        foreach ($t in $texts) {
-          try {
-            $name = [string]$t.Current.Name
-            if ($name -match '^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*/\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$') {
-              $dur = (($name -split '/')[-1]).Trim()
-              $b = [int]$matches[4] * 60 + [int]$matches[5]
-              if ($matches[6]) { $b = $b * 60 + [int]$matches[6] }
-              $secs = $b
-            } elseif ($name.Length -gt $desc.Length -and $t.Current.BoundingRectangle.Width -ge 120) {
-              $desc = $name
-            }
-          } catch { }
-        }
-        if ($secs -gt 0) {
-          $results += [pscustomobject]@{
-            Duration = $dur; Seconds = $secs; Description = $desc
-            Hwnd = $w.Current.NativeWindowHandle; Area = ($rect.Width * $rect.Height)
-          }
-        }
-      } catch { }
-    }
-  } catch { }
-  if ($results.Count -gt 0) {
-    $result = @($results | Sort-Object -Property `
-      @{ Expression = { [int]($_.Hwnd -eq $fg) }; Descending = $true }, `
-      @{ Expression = { $_.Area }; Descending = $true } | Select-Object -First 1)[0]
-  }
-  $script:playerInfoCache = $result
-  return $result
-}
-
-$script:lastHistoryKey = ''
-$script:lastHistoryAt = [DateTime]::MinValue
-function Update-PlayerHistory($p) {
-  if (-not $p) { return }
-  $key = ([string]$p.Description) + '|' + ([string]$p.Duration)
-  $now = Get-Date
-  if ($key -eq $script:lastHistoryKey -and ($now - $script:lastHistoryAt).TotalSeconds -lt 5) { return }
-  $script:lastHistoryKey = $key
-  $script:lastHistoryAt = $now
-  try {
-    $line = [pscustomobject]@{
-      time = $now.ToString('o'); title = [string]$p.Description
-      duration = [string]$p.Duration; seconds = [int]$p.Seconds
-    } | ConvertTo-Json -Compress
-    $file = Join-Path $PSScriptRoot 'work\player_history.jsonl'
-    Add-Content -LiteralPath $file -Value $line -Encoding utf8
-    $all = @(Get-Content -LiteralPath $file -ErrorAction SilentlyContinue)
-    if ($all.Count -gt 500) {
-      $all[-500..-1] | Set-Content -LiteralPath $file -Encoding utf8
-    }
-  } catch { }
-}
-
 $script:autoLibraryAt = @{}
 function Update-PlayedLibrary($card) {
   # 卡片页由悬停绑定精确写入；这里只负责播放窗口里“点开/播放过”的视频
@@ -698,7 +619,6 @@ function Update-PlayedLibrary($card) {
     Update-LibraryEntry @{
       id = $id; url = $c.Url; size = $size; width = 0; height = 0
       status = $status; source = 'player'; title = ''; duration = ''; cover = ''
-      firstSeen = (Get-Date).ToString('o')
     }
     Write-HudLog ("library-auto id=$id size=$size (metadata pending)")
   }
@@ -1137,8 +1057,7 @@ function Update-Hud {
 
     $p = Get-WeChatHost
     if (-not $p) {
-      Update-PlayerHistory (Get-PlayerInfo)
-      Update-PlayedLibrary
+      if ($isWeChatFg) { Update-PlayedLibrary }
       Hide-Hud; Hide-Badges
       return
     }
@@ -1178,7 +1097,6 @@ function Update-Hud {
       [void][HudNative]::GetCursorPos([ref]$pt)
     }
     $card = Get-CardHit $script:cards $pt.X $pt.Y
-    Update-PlayedLibrary $card
     $hitCard = $card
     if ($hitCard) {
       $ckey = Get-CardKey $hitCard
