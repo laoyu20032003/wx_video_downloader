@@ -782,19 +782,6 @@ $listenBlock.VerticalAlignment = 'Center'
 $listenBlock.Margin = New-Object System.Windows.Thickness(18, 3, 0, 0)
 $top.Children.Add($listenBlock) | Out-Null
 
-$refreshBtn = New-Object System.Windows.Controls.Button
-$refreshBtn.Content = '同步'
-$refreshBtn.ToolTip = '只重新读取 work\library.json，合并新条目；不重置列表、不重新下载'
-$refreshBtn.Margin = New-Object System.Windows.Thickness(18, 0, 0, 0)
-$refreshBtn.Padding = New-Object System.Windows.Thickness(12, 4, 12, 4)
-$refreshBtn.Add_Click({
-  $script:LibraryStamp = [DateTime]::MinValue
-  Sync-Library
-  Update-Count
-  Write-GuiLog 'manual-sync'
-})
-$top.Children.Add($refreshBtn) | Out-Null
-
 $openBtn = New-Object System.Windows.Controls.Button
 $openBtn.Content = '打开输出目录'
 $openBtn.Margin = New-Object System.Windows.Thickness(8, 0, 0, 0)
