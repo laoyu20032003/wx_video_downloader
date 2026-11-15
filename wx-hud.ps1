@@ -30,7 +30,7 @@ param(
   [int]$PinX = -1,
   [int]$PinY = -1,
   [int]$LingerSeconds = 4,
-  [double]$HoverDwellSeconds = 2.0,
+  [double]$HoverDwellSeconds = 1.0,
   [switch]$DebugState,
   [string]$FlowsFile = "",
   [string]$IndexFile = "",
@@ -173,7 +173,6 @@ $script:index = @{}
 $script:saving = $false
 $script:saveProc = $null
 $script:saveKey = ''
-$script:saveDesc = ''
 $script:saveDur = ''
 $script:saveMedia = $null
 $script:saveCandidates = @()
@@ -482,11 +481,9 @@ function Load-Library {
         if ($e.updated) { try { $eu = [DateTime]::Parse([string]$e.updated, [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime() } catch { } }
         if ($eu -lt $epoch) { $dirty = $true; continue }
       }
-      if ($e.source -eq 'player' -and ($e.title -or $e.cover -or $e.duration)) {
-        # 旧版本把播放器标题/截图按时间顺序贴到了某个 ID 上；这些字段不可信，清空等卡片/手动绑定
-        $e | Add-Member -NotePropertyName title -NotePropertyValue '' -Force
-        $e | Add-Member -NotePropertyName duration -NotePropertyValue '' -Force
-        $e | Add-Member -NotePropertyName cover -NotePropertyValue '' -Force
+      if ($e.PSObject.Properties['title']) {
+        # 项目不再使用 title，清掉旧字段
+        $e.PSObject.Properties.Remove('title')
         $dirty = $true
       }
       $script:Library[[string]$e.id] = $e
@@ -518,7 +515,7 @@ function Save-Library {
           $mu = [DateTime]::MinValue
           if ($de.updated) { try { $du = [DateTime]::Parse([string]$de.updated, [Globalization.CultureInfo]::InvariantCulture) } catch { } }
           if ($mem.updated) { try { $mu = [DateTime]::Parse([string]$mem.updated, [Globalization.CultureInfo]::InvariantCulture) } catch { } }
-          foreach ($field in @('title', 'cover', 'file', 'source', 'firstSeen')) {
+          foreach ($field in @('cover', 'file', 'source', 'firstSeen')) {
             $dv = $de.PSObject.Properties[$field]
             if (-not $dv -or [string]::IsNullOrWhiteSpace([string]$dv.Value)) { continue }
             $mv = $mem.PSObject.Properties[$field]
@@ -545,7 +542,7 @@ function Update-LibraryEntry([hashtable]$Fields) {
   $id = [string]$Fields.id
   if (-not $id) { return }
   $e = if ($script:Library.ContainsKey($id)) { $script:Library[$id] } else { [pscustomobject]@{} }
-  $keepIfEmpty = @('cover', 'title', 'duration', 'url')
+  $keepIfEmpty = @('cover', 'duration', 'url')
   foreach ($k in $Fields.Keys) {
     $key = [string]$k
     $value = $Fields[$k]
@@ -632,7 +629,7 @@ function Update-PlayedLibrary($card) {
     $status = if ($size -gt 0) { 'available' } else { 'played' }
     Update-LibraryEntry @{
       id = $id; url = $c.Url; size = $size; width = 0; height = 0
-      status = $status; source = 'player'; title = ''; duration = ''; cover = ''
+      status = $status; source = 'player'; duration = ''; cover = ''
     }
     Write-HudLog ("library-auto id=$id size=$size (metadata pending)")
   }
@@ -680,7 +677,6 @@ function Start-Save {
   $media = $cands[0]
 
   $script:saveKey = Get-CardKey $card
-  $script:saveDesc = $card.Description
   $script:saveDur = $card.Duration
   $cardInfo = "dur=$($card.Duration)"
   $script:saveCandidates = $cands
@@ -732,13 +728,11 @@ function Poll-Save {
       file        = $saved
       time        = (Get-Date).ToString('o')
       duration    = $script:saveDur
-      description = $script:saveDesc
     }
     $script:index[$script:saveKey] = $entry
     Save-Index
     $info = Get-VideoInfo $saved
     $lib = @{ id = $script:saveMedia.M; file = $saved; status = 'downloaded' }
-    if ($script:saveDesc) { $lib.title = $script:saveDesc }
     if ($script:saveDur) { $lib.duration = $script:saveDur }
     if ($info) {
       $lib.size = [long]$info.size
@@ -796,7 +790,7 @@ if ($Diagnose) {
     $state = if ($hit) { "已下载 $($hit.Name)" } else { "未下载" }
     "{0},{1} {2}x{3} | {4} | {5} | {6} | {7}" -f `
       [int]$c.Cover.X, [int]$c.Cover.Y, [int]$c.Cover.Width, [int]$c.Cover.Height,
-      $c.Duration, $state, (Shorten $c.Description 36), $c.Like
+      $c.Duration, $state, $c.Like
   }
   exit 0
 }
@@ -1164,7 +1158,6 @@ function Update-Hud {
           elseif ($size -gt 0) { $finalSize = [long]$size }
           $fields = @{
             id = $hits[0].M
-            title = $hitCard.Description
             duration = $hitCard.Duration
             url = $hits[0].Url
             cover = $coverPath
@@ -1225,7 +1218,7 @@ function Update-Hud {
     $media = Get-BoundMedia $card
     if (-not $media) { $media = Get-CurrentMedia }
     $indexed = Get-IndexedEntry $card $media
-    $title.Text = if ($card.Description) { Shorten $card.Description 48 } else { "（无文案）" }
+    $title.Text = '视频号'
 
     if ($noticeActive) {
       if ($script:saving) {

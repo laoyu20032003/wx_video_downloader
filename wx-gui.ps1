@@ -31,7 +31,7 @@ using System;
 using System.ComponentModel;
 using System.Windows.Media;
 public class WxVideoRow : INotifyPropertyChanged {
-  private string _id, _shortId, _title, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated, _source, _coverPath, _coverMethod;
+  private string _id, _shortId, _fileName, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated, _source, _coverPath, _coverMethod;
   private Brush _statusBrush;
   private ImageSource _coverImage;
   private bool _pending, _canAct;
@@ -39,7 +39,7 @@ public class WxVideoRow : INotifyPropertyChanged {
 
   public string Id { get { return _id; } set { if (_id != value) { _id = value; Raise("Id"); } } }
   public string ShortId { get { return _shortId; } set { if (_shortId != value) { _shortId = value; Raise("ShortId"); } } }
-  public string Title { get { return _title; } set { if (_title != value) { _title = value; Raise("Title"); } } }
+  public string FileName { get { return _fileName; } set { if (_fileName != value) { _fileName = value; Raise("FileName"); } } }
   public string Duration { get { return _duration; } set { if (_duration != value) { _duration = value; Raise("Duration"); } } }
   public string SizeText { get { return _sizeText; } set { if (_sizeText != value) { _sizeText = value; Raise("SizeText"); } } }
   public string Resolution { get { return _resolution; } set { if (_resolution != value) { _resolution = value; Raise("Resolution"); } } }
@@ -426,7 +426,7 @@ function Update-ListenerStatus {
   }
 }
 
-function New-Row($entry, [string]$fallbackTitle) {
+function New-Row($entry) {
   $file = [string]$entry.file
   $exists = $file -and (Test-Path -LiteralPath $file)
   $size = [long]0
@@ -463,12 +463,11 @@ function New-Row($entry, [string]$fallbackTitle) {
   }
 
   $cover = if ($entry.cover -and (Test-Path -LiteralPath $entry.cover)) { Load-Bitmap $entry.cover } else { $script:Placeholder }
-  $title = if ($entry.title) { [string]$entry.title } else { $fallbackTitle }
 
   $row = New-Object WxVideoRow
   $row.Id = [string]$entry.id
   $row.ShortId = $row.Id.Substring(0, [Math]::Min(8, $row.Id.Length))
-  $row.Title = $title
+  $row.FileName = if ($exists) { Split-Path -Leaf $file } else { '—' }
   $row.Duration = if ($entry.duration) { [string]$entry.duration } else { '—' }
   $row.SizeText = Format-Size $size
   $row.Resolution = if ($w -gt 0 -and $h -gt 0) { "${w}x${h}" } else { '—' }
@@ -512,7 +511,7 @@ function Load-Rows {
       foreach ($e in @($lib.entries | Sort-Object -Property updated -Descending)) {
         if (-not $e.id) { continue }
         if (-not (Test-AfterEpoch ([string]$e.updated))) { continue }
-        $row = New-Row $e '（无标题）'
+        $row = New-Row $e
         $rows.Add($row)
         $seenIds[[string]$e.id] = $true
         if ($row.File) { $seenFiles[$row.File.ToLower()] = $true }
@@ -530,11 +529,11 @@ function Load-Rows {
         if (-not (Test-AfterEpoch ([string]$e.time))) { continue }
         if ($seenFiles.ContainsKey($e.file.ToLower())) { continue }
         $fake = [pscustomobject]@{
-          id = [string]$e.m; title = '（历史记录，无标题）'; duration = [string]$e.duration
+          id = [string]$e.m; duration = [string]$e.duration
           file = [string]$e.file; status = 'downloaded'; updated = [string]$e.time
           cover = ''; url = ''; size = 0; width = 0; height = 0
         }
-        $rows.Add((New-Row $fake '（历史记录，无标题）'))
+        $rows.Add((New-Row $fake))
         $seenFiles[$e.file.ToLower()] = $true
       }
     } catch { }
@@ -544,17 +543,6 @@ function Load-Rows {
       (Get-Item -LiteralPath $LibraryFile).LastWriteTimeUtc
     } else { [DateTime]::MinValue }
   } catch { }
-  Disambiguate-Titles
-}
-
-function Disambiguate-Titles {
-  $groups = @($rows | Group-Object -Property Title | Where-Object { $_.Count -gt 1 })
-  foreach ($g in $groups) {
-    foreach ($r in $g.Group) {
-      $suffix = ' · ' + $r.Id.Substring(0, [Math]::Min(8, $r.Id.Length))
-      if (-not $r.Title.EndsWith($suffix)) { $r.Title = $r.Title + $suffix }
-    }
-  }
 }
 
 function Sync-Library {
@@ -574,8 +562,8 @@ function Sync-Library {
     if ($byId.ContainsKey($id)) {
       $row = $byId[$id]
       if ($row.Pending -or $row.StatusText -eq '下载中…') { continue }
-      $fresh = New-Row $e '（无标题）'
-      if ($fresh.Title -and $fresh.Title -notlike '（无标题）*') { $row.Title = $fresh.Title }
+      $fresh = New-Row $e
+      $row.FileName = $fresh.FileName
       $row.Duration = $fresh.Duration
       $row.SizeText = $fresh.SizeText
       $row.Resolution = $fresh.Resolution
@@ -601,15 +589,14 @@ function Sync-Library {
       }
       $changed = $true
     } else {
-      $row = New-Row $e '（无标题）'
+      $row = New-Row $e
       $rows.Insert(0, $row)
       $byId[$id] = $row
       $changed = $true
       Queue-CoverRefresh $row
-      Write-GuiLog ("library-new id=$id title=$($row.Title)")
+      Write-GuiLog ("library-new id=$id")
     }
   }
-  Disambiguate-Titles
   if ($changed) { Update-Count }
 }
 
@@ -650,9 +637,6 @@ function Save-LibraryPatch($row) {
     }
     $e = if ($entries.ContainsKey($row.Id)) { $entries[$row.Id] } else { [pscustomobject]@{} }
     $e | Add-Member -NotePropertyName id -NotePropertyValue $row.Id -Force
-    if ($row.Title -and $row.Title -notlike '（无标题）*') {
-      $e | Add-Member -NotePropertyName title -NotePropertyValue $row.Title -Force
-    }
     if ($row.Duration -and $row.Duration -ne '—') {
       $e | Add-Member -NotePropertyName duration -NotePropertyValue $row.Duration -Force
     }
@@ -697,7 +681,7 @@ function Save-IndexPatch($row) {
     $filtered = @($entries | Where-Object { $_.m -ne $row.Id })
     $filtered += [pscustomobject]@{
       key = 'gui|' + $row.Id; m = $row.Id; file = $row.File
-      time = (Get-Date).ToString('o'); duration = $row.Duration; description = $row.Title
+      time = (Get-Date).ToString('o'); duration = $row.Duration
     }
     $dir = Split-Path -Parent $IndexFile
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -733,7 +717,7 @@ function Invoke-RowAction($row, [switch]$Auto) {
   $row.StatusBrush = $blue
   $row.ActionText = '…'
   $row.CanAct = $false
-  Write-GuiLog ("download-start id=$($row.Id) auto=$([bool]$Auto) title=$($row.Title)")
+  Write-GuiLog ("download-start id=$($row.Id) auto=$([bool]$Auto)")
   try {
     $proc = Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolScript,
@@ -842,7 +826,7 @@ $headerXaml = @"
   </Grid.ColumnDefinitions>
   <TextBlock Grid.Column="0" Text="封面" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
   <TextBlock Grid.Column="1" Text="ID" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-  <TextBlock Grid.Column="2" Text="标题" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
+  <TextBlock Grid.Column="2" Text="文件名" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
   <TextBlock Grid.Column="3" Text="时长" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
   <TextBlock Grid.Column="4" Text="大小" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
   <TextBlock Grid.Column="5" Text="分辨率" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
@@ -869,7 +853,7 @@ $rowXaml = @"
       <Image Source="{Binding CoverImage}" Width="64" Height="114" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
     <TextBlock Grid.Column="1" Text="{Binding ShortId}" Foreground="#8A8A8A" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center" ToolTip="{Binding Id}"/>
-    <TextBlock Grid.Column="2" Text="{Binding Title}" Foreground="#E8E8E8" VerticalAlignment="Center" Margin="8,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
+    <TextBlock Grid.Column="2" Text="{Binding FileName}" Foreground="#E8E8E8" VerticalAlignment="Center" Margin="8,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding FileName}"/>
     <TextBlock Grid.Column="3" Text="{Binding Duration}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
     <TextBlock Grid.Column="4" Text="{Binding SizeText}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
     <TextBlock Grid.Column="5" Text="{Binding Resolution}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
@@ -979,7 +963,7 @@ function Show-RowDetails($row) {
   if (-not $row) { $detailsBox.Text = ''; return }
   $detailsBox.Text = @(
     "ID:          $($row.Id)"
-    "标题:        $($row.Title)"
+    "文件名:      $($row.FileName)"
     "时长:        $($row.Duration)"
     "大小:        $($row.SizeText)"
     "分辨率:      $($row.Resolution)"
@@ -1171,6 +1155,7 @@ $timer.Add_Tick({
       }
       if ($actual -gt 0) { $job.Row.Duration = Format-DurationSeconds $actual }
       $job.Row.File = $saved
+      $job.Row.FileName = Split-Path -Leaf $saved
       $job.Row.StatusText = '下载完成'
       $job.Row.StatusBrush = $green
       $job.Row.ActionText = '打开'
