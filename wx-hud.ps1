@@ -1151,7 +1151,7 @@ function Update-Hud {
           $coverPath = if ($usedFallback) { $null } else { Save-CardCover $hitCard $hits[0].M }
           $size = Get-MediaSize $hits[0].Url
           $idx = Get-IndexedEntry $hitCard $null
-          $status = if ($idx) { 'downloaded' } elseif ($size -gt 0) { 'available' } else { 'needs-replay' }
+          $libStatus = if ($idx) { 'downloaded' } elseif ($size -gt 0) { 'available' } else { 'needs-replay' }
           $info = if ($idx -and (Test-Path -LiteralPath $idx.file)) { Get-VideoInfo $idx.file } else { $null }
           $finalSize = 0; $fw = 0; $fh = 0
           if ($info) { $finalSize = [long]$info.size; $fw = [int]$info.width; $fh = [int]$info.height }
@@ -1164,7 +1164,7 @@ function Update-Hud {
             size = $finalSize
             width = $fw
             height = $fh
-            status = $status
+            status = $libStatus
             source = 'card'
           }
           if ($idx -and $idx.file) { $fields.file = $idx.file }
@@ -1254,6 +1254,7 @@ function Update-Hud {
   } catch {
     Write-DebugState ("ERR " + $_.Exception.Message)
     Write-HudLog ("ERR " + $_.Exception.Message)
+    Write-HudLog ("ERRSTACK " + $_.ScriptStackTrace)
   }
 }
 
