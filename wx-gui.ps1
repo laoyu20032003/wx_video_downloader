@@ -1176,7 +1176,13 @@ $timer.Add_Tick({
         $job.Row.CanAct = $true
         $job.Row.ActionText = '下载'
       }
-      Write-GuiLog ("download-fail id=$($job.Row.Id) auto=$($job.Auto)")
+      $lastLine = @($text -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+      $reason = if ($lastLine.Count -gt 0) { ([string]$lastLine[0]).Trim() } else { '' }
+      if (-not $reason) {
+        try { $reason = (Get-Content -LiteralPath $job.Err -Tail 1 -ErrorAction SilentlyContinue | Out-String).Trim() } catch { }
+      }
+      if ($reason.Length -gt 300) { $reason = $reason.Substring(0, 300) }
+      Write-GuiLog ("download-fail id=$($job.Row.Id) auto=$($job.Auto) reason=$reason")
       if (-not $job.Auto) {
         [System.Windows.MessageBox]::Show("下载失败：签名地址可能已过期，或内存里没有明文头。`n`n已加入待重播。请在微信里重新播放这条视频（悬停卡片 2～3 秒），HUD 捕捉到新地址后视频库会自动继续下载。", '视频号视频库') | Out-Null
       }

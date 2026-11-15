@@ -200,6 +200,8 @@ HUD 是只读覆盖层，不修改微信页面。
 
 细节见 [docs/how-it-works.md](docs/how-it-works.md)。
 
+Hover 行为排查：运行 `pwsh -File tools\hover-diag.ps1`，报告写到 `work\hover-diag.md`；说明见 [docs/hover-diagnostics.md](docs/hover-diagnostics.md)。
+
 ## 常见问题
 
 **播放窗口按 F8 没反应**

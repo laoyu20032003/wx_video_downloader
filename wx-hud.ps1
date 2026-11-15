@@ -169,6 +169,7 @@ $script:mediaFirst = @{}
 $script:cardMedia = @{}
 $script:CardMediaFile = Join-Path $PSScriptRoot 'work\card_media.json'
 $script:hoverKey = ''
+$script:hoverCandKey = ''
 $script:hoverStart = [datetime]::MinValue
 $script:index = @{}
 $script:saving = $false
@@ -1170,6 +1171,7 @@ function Update-Hud {
       $ckey = Get-CardKey $hitCard
       if ($ckey -ne $script:hoverKey) {
         $script:hoverKey = $ckey
+        $script:hoverCandKey = ''
         $script:hoverStart = Get-Date
         Write-HudLog ("hover-start key=$ckey fallback=$usedFallback")
       }
@@ -1200,7 +1202,10 @@ function Update-Hud {
         $all = @(Get-MediaCandidates 8 |
           Where-Object { $_.First -ge $script:hoverStart.AddSeconds(-0.3) } |
           Sort-Object -Property First)
-        Write-HudLog ("hover-cands " + (($all | ForEach-Object { "$($_.M)@$($_.MaxEnd)#$($_.HasM)" }) -join ','))
+        if ($script:hoverCandKey -ne $ckey) {
+          Write-HudLog ("hover-cands " + (($all | ForEach-Object { "$($_.M)@$($_.MaxEnd)#$($_.HasM)" }) -join ','))
+          $script:hoverCandKey = $ckey
+        }
         $withM = @($all | Where-Object { $_.HasM })
         $hits = if ($withM.Count -gt 0) { $withM } else { $all }
         $hits = @($hits | Sort-Object -Property @{ Expression = { $_.MaxEnd }; Descending = $true }, First | Select-Object -First 5)
