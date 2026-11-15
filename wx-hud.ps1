@@ -670,10 +670,14 @@ function Update-PlayedLibrary($card, $playerInfo) {
     $id = [string]$c.M
     if (-not $id) { continue }
     if ($script:Library.ContainsKey($id)) {
-      # 已有条目只补 URL/大小；title/cover 必须由这张卡或手动绑定提供
+      # 已有条目只刷新 URL/大小；title/cover 必须由这张卡或手动绑定提供
       $old = $script:Library[$id]
-      if (-not $old.url -or -not $old.size) {
-        $size = Get-MediaSize $c.Url
+      $age = 999
+      if ($old.updated) {
+        try { $age = ((Get-Date) - [DateTime]::Parse([string]$old.updated, [Globalization.CultureInfo]::InvariantCulture)).TotalSeconds } catch { }
+      }
+      if (-not $old.url -or -not $old.size -or $age -gt 8) {
+        $size = if ($old.size) { [long]$old.size } else { Get-MediaSize $c.Url }
         Update-LibraryEntry @{ id = $id; url = $c.Url; size = $size }
       }
       continue

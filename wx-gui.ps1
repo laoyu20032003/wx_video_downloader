@@ -30,7 +30,7 @@ using System;
 using System.ComponentModel;
 using System.Windows.Media;
 public class WxVideoRow : INotifyPropertyChanged {
-  private string _id, _shortId, _title, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated;
+  private string _id, _shortId, _title, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated, _source, _coverPath;
   private Brush _statusBrush;
   private ImageSource _coverImage;
   private bool _pending, _canAct;
@@ -49,6 +49,8 @@ public class WxVideoRow : INotifyPropertyChanged {
   public string Url { get { return _url; } set { if (_url != value) { _url = value; Raise("Url"); } } }
   public ImageSource CoverImage { get { return _coverImage; } set { if (_coverImage != value) { _coverImage = value; Raise("CoverImage"); } } }
   public string Updated { get { return _updated; } set { if (_updated != value) { _updated = value; Raise("Updated"); } } }
+  public string Source { get { return _source; } set { if (_source != value) { _source = value; Raise("Source"); } } }
+  public string CoverPath { get { return _coverPath; } set { if (_coverPath != value) { _coverPath = value; Raise("CoverPath"); } } }
   public bool Pending { get { return _pending; } set { if (_pending != value) { _pending = value; Raise("Pending"); } } }
   public DateTime PendingAt { get { return _pendingAt; } set { _pendingAt = value; Raise("PendingAt"); } }
   public bool CanAct { get { return _canAct; } set { if (_canAct != value) { _canAct = value; Raise("CanAct"); } } }
@@ -85,6 +87,24 @@ function Convert-DurationText([string]$s) {
     return ([int]$matches[1] * 3600 + [int]$matches[2] * 60 + [int]$matches[3])
   }
   return 0
+}
+
+function Format-DurationSeconds([int]$sec) {
+  if ($sec -le 0) { return '—' }
+  if ($sec -ge 3600) { return ('{0}:{1:D2}:{2:D2}' -f [int]($sec / 3600), [int](($sec % 3600) / 60), ($sec % 60)) }
+  return ('{0}:{1:D2}' -f [int]($sec / 60), ($sec % 60))
+}
+
+function Get-VideoCover([string]$file, [string]$id) {
+  try {
+    $dir = Join-Path $Work 'covers'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $safe = ($id -replace '[^0-9A-Za-z_-]', '')
+    $path = Join-Path $dir ($safe + '.jpg')
+    & ffmpeg -y -v error -ss 0.2 -i $file -frames:v 1 -vf 'scale=320:-2' $path 2>$null
+    if (Test-Path -LiteralPath $path) { return $path }
+  } catch { }
+  return $null
 }
 
 function Get-VideoInfo([string]$file) {
@@ -312,7 +332,7 @@ function New-Row($entry, [string]$fallbackTitle) {
     if ($entry.width -and $entry.height) { $w = [int]$entry.width; $h = [int]$entry.height }
   }
 
-  $status = if ($exists) { 'downloaded' } elseif ($entry.status) { [string]$entry.status } else { 'needs-replay' }
+  $status = if ($exists) { 'downloaded' } elseif ($entry.status -eq 'downloaded') { 'available' } elseif ($entry.status) { [string]$entry.status } else { 'needs-replay' }
   $statusText = switch ($status) {
     'downloaded' { '已下载' }
     'downloading' { '下载中…' }
@@ -346,6 +366,8 @@ function New-Row($entry, [string]$fallbackTitle) {
   $row.File = if ($exists) { $file } else { '' }
   $row.Url = [string]$entry.url
   $row.CoverImage = $cover
+  $row.CoverPath = [string]$entry.cover
+  $row.Source = [string]$entry.source
   $row.Updated = [string]$entry.updated
   $row.Pending = $false
   if (-not $exists -and $script:PendingIds.ContainsKey($row.Id)) {
@@ -353,6 +375,14 @@ function New-Row($entry, [string]$fallbackTitle) {
     $row.PendingAt = $script:PendingIds[$row.Id]
     $row.StatusText = '待重播'
     $row.StatusBrush = $amber
+  }
+  if ($row.Source -eq 'player' -and -not $exists) {
+    $row.CanAct = $false
+    $row.ActionText = '自动'
+    if (-not $row.Pending -and $row.StatusText -eq '可下载') {
+      $row.StatusText = '等待自动下载'
+      $row.StatusBrush = $blue
+    }
   }
   return $row
 }
@@ -434,11 +464,20 @@ function Sync-Library {
       $row.Resolution = $fresh.Resolution
       $row.Url = $fresh.Url
       $row.CoverImage = $fresh.CoverImage
+      $row.CoverPath = $fresh.CoverPath
+      $row.Source = $fresh.Source
       if ($fresh.File -or -not $row.File) {
         $row.File = $fresh.File
         $row.StatusText = $fresh.StatusText
         $row.StatusBrush = $fresh.StatusBrush
         $row.ActionText = $fresh.ActionText
+      }
+      if ($row.Source -eq 'player' -and -not $row.File) {
+        $row.CanAct = $false
+        $row.ActionText = '自动'
+        if ($row.StatusText -eq '可下载') { $row.StatusText = '等待自动下载'; $row.StatusBrush = $blue }
+      } else {
+        $row.CanAct = $true
       }
       $changed = $true
     } else {
@@ -469,6 +508,7 @@ function Save-LibraryPatch($row) {
     $e | Add-Member -NotePropertyName duration -NotePropertyValue $row.Duration -Force
     $e | Add-Member -NotePropertyName file -NotePropertyValue $row.File -Force
     $e | Add-Member -NotePropertyName status -NotePropertyValue 'downloaded' -Force
+    if ($row.CoverPath) { $e | Add-Member -NotePropertyName cover -NotePropertyValue $row.CoverPath -Force }
     $e | Add-Member -NotePropertyName updated -NotePropertyValue ((Get-Date).ToString('o')) -Force
     $entries[$row.Id] = $e
     $tmp = $LibraryFile + '.tmp'
@@ -498,15 +538,22 @@ function Save-IndexPatch($row) {
   } catch { }
 }
 
-function Invoke-RowAction($row) {
+function Invoke-RowAction($row, [switch]$Auto) {
   if ($row.File -and (Test-Path -LiteralPath $row.File)) {
     Start-Process explorer.exe -ArgumentList ('/select,"' + $row.File + '"')
     return
   }
   if (-not $row.Url) {
     Set-RowPending $row $true
-    $row.CanAct = $true
-    [System.Windows.MessageBox]::Show("这条还没有可用的下载地址，已加入待重播。`n`n请回到作者主页悬停这张卡片 2～3 秒；HUD 捕捉到新地址后，视频库会自动继续下载。", '视频号视频库') | Out-Null
+    if ($Auto) {
+      $row.CanAct = $false
+      $row.StatusText = '等待地址'
+      $row.StatusBrush = $amber
+      $row.ActionText = '自动'
+    } else {
+      $row.CanAct = $true
+      [System.Windows.MessageBox]::Show("这条还没有可用的下载地址，已加入待重播。`n`n请回到作者主页悬停这张卡片 2～3 秒；HUD 捕捉到新地址后，视频库会自动继续下载。", '视频号视频库') | Out-Null
+    }
     return
   }
   $tag = ($row.Id -replace '[^0-9A-Za-z_-]', '')
@@ -518,20 +565,22 @@ function Invoke-RowAction($row) {
   $row.StatusBrush = $blue
   $row.ActionText = '…'
   $row.CanAct = $false
-  Write-GuiLog ("download-start id=$($row.Id) title=$($row.Title)")
+  Write-GuiLog ("download-start id=$($row.Id) auto=$([bool]$Auto) title=$($row.Title)")
   try {
     $proc = Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolScript,
       '-SaveUrl', $row.Url, '-SaveTag', $tag, '-OutDir', $OutDir
     ) -RedirectStandardOutput $out -RedirectStandardError $err
     Set-RowPending $row $false
-    $script:Jobs[$proc.Id] = [pscustomobject]@{ Row = $row; Out = $out; Err = $err; Proc = $proc; Phase = '匹配中…' }
+    $script:Jobs[$proc.Id] = [pscustomobject]@{ Row = $row; Out = $out; Err = $err; Proc = $proc; Phase = '匹配中…'; Auto = [bool]$Auto }
   } catch {
-    $row.CanAct = $true
+    $row.CanAct = if ($Auto) { $false } else { $true }
     $row.StatusText = '下载失败'
     $row.StatusBrush = $red
-    $row.ActionText = '重试'
-    [System.Windows.MessageBox]::Show("启动下载失败：$($_.Exception.Message)", '视频号视频库') | Out-Null
+    $row.ActionText = if ($Auto) { '自动' } else { '重试' }
+    if (-not $Auto) {
+      [System.Windows.MessageBox]::Show("启动下载失败：$($_.Exception.Message)", '视频号视频库') | Out-Null
+    }
   }
 }
 
@@ -768,10 +817,11 @@ function Show-RowDetails($row) {
     "大小:        $($row.SizeText)"
     "分辨率:      $($row.Resolution)"
     "状态:        $($row.StatusText)"
+    "来源:        $($row.Source)"
     "待重播:      $($row.Pending)"
     "文件:        $(if ($row.File) { $row.File } else { '—' })"
     "URL:         $(if ($row.Url) { $row.Url } else { '—' })"
-    "封面:        列表缩略图（work\\covers）"
+    "封面文件:    $(if ($row.CoverPath) { $row.CoverPath } else { '—' })"
     "更新时间:    $($row.Updated)"
   ) -join "`r`n"
 }
@@ -863,6 +913,15 @@ Update-Count
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(600)
 
+function Start-AutoDownload {
+  if ($script:Jobs.Count -gt 0) { return }
+  $r = @($rows | Where-Object {
+      $_.Source -eq 'player' -and -not $_.File -and $_.Url -and -not $_.Pending -and
+      $_.StatusText -notin @('匹配中…', '下载中…', '校验中…', '下载完成', '已下载', '下载失败', '打开')
+    } | Select-Object -First 1)
+  if ($r.Count -gt 0) { Invoke-RowAction $r[0] -Auto }
+}
+
 function Check-Pending {
   $pendingRows = @($rows | Where-Object { $_.Pending })
   if ($pendingRows.Count -eq 0) { return }
@@ -896,7 +955,7 @@ function Check-Pending {
     $row.StatusBrush = $blue
     $row.ActionText = '下载中'
     Set-RowPending $row $false
-    Invoke-RowAction $row
+    Invoke-RowAction $row -Auto:($row.Source -eq 'player')
   }
 }
 
@@ -905,6 +964,7 @@ $timer.Add_Tick({
   Update-Count
   Update-PlayerNow
   Sync-Library
+  Start-AutoDownload
   Check-Pending
   foreach ($id in @($script:Jobs.Keys)) {
     $job = $script:Jobs[$id]
@@ -935,12 +995,21 @@ $timer.Add_Tick({
       if ($expected -gt 0 -and $actual -gt 0 -and [Math]::Abs($expected - $actual) -gt 2) {
         Write-GuiLog ("download-duration-warning id=$($job.Row.Id) expected=${expected}s actual=${actual}s file=$saved")
       }
+      if ($actual -gt 0) { $job.Row.Duration = Format-DurationSeconds $actual }
       $job.Row.File = $saved
       $job.Row.StatusText = '下载完成'
       $job.Row.StatusBrush = $green
       $job.Row.ActionText = '打开'
       $job.Row.SizeText = Format-Size ([long](Get-Item -LiteralPath $saved).Length)
       if ($info -and $info.width -gt 0) { $job.Row.Resolution = "$($info.width)x$($info.height)" }
+      $cover = if (-not $job.Row.CoverPath -or $job.Row.Source -eq 'player') {
+        Get-VideoCover $saved $job.Row.Id
+      } else { $null }
+      if ($cover) {
+        $job.Row.CoverPath = $cover
+        $img = Load-Bitmap $cover
+        if ($img) { $job.Row.CoverImage = $img }
+      }
       Save-LibraryPatch $job.Row
       Save-IndexPatch $job.Row
       Set-RowPending $job.Row $false
@@ -948,11 +1017,19 @@ $timer.Add_Tick({
       Update-Count
     } else {
       Set-RowPending $job.Row $true
-      $job.Row.StatusText = '待重播'
+      $job.Row.StatusText = if ($job.Auto) { '等待重播' } else { '待重播' }
       $job.Row.StatusBrush = $amber
-      $job.Row.ActionText = '下载'
-      Write-GuiLog ("download-fail id=$($job.Row.Id)")
-      [System.Windows.MessageBox]::Show("下载失败：签名地址可能已过期，或内存里没有明文头。`n`n已加入待重播。请在微信里重新播放这条视频（悬停卡片 2～3 秒），HUD 捕捉到新地址后视频库会自动继续下载。", '视频号视频库') | Out-Null
+      if ($job.Auto) {
+        $job.Row.CanAct = $false
+        $job.Row.ActionText = '自动'
+      } else {
+        $job.Row.CanAct = $true
+        $job.Row.ActionText = '下载'
+      }
+      Write-GuiLog ("download-fail id=$($job.Row.Id) auto=$($job.Auto)")
+      if (-not $job.Auto) {
+        [System.Windows.MessageBox]::Show("下载失败：签名地址可能已过期，或内存里没有明文头。`n`n已加入待重播。请在微信里重新播放这条视频（悬停卡片 2～3 秒），HUD 捕捉到新地址后视频库会自动继续下载。", '视频号视频库') | Out-Null
+      }
     }
     $script:Jobs.Remove($id)
   }
