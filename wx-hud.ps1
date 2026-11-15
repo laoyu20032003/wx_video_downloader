@@ -649,11 +649,22 @@ function Update-PlayedLibrary($card, $playerInfo) {
     if (($now - $c.First).TotalMinutes -gt 15) { continue }
     $id = [string]$c.M
     if (-not $id) { continue }
-    if ($script:Library.ContainsKey($id)) { continue }
+    $isFirst = ($id -eq [string]$cands[0].M)
+    if ($script:Library.ContainsKey($id)) {
+      # 预加载条目后来成了当前播放：把标题/时长/封面补正
+      $old = $script:Library[$id]
+      if ($playerInfo -and $isFirst -and ($old.title -like '（预加载）*' -or $old.title -like '（播放过的视频）*')) {
+        Update-LibraryEntry @{
+          id = $id; title = $playerInfo.Description; duration = $playerInfo.Duration
+          url = $c.Url; cover = (Save-PlayerCover $playerInfo $id)
+        }
+        Write-HudLog ("library-promote id=$id")
+      }
+      continue
+    }
     if ($script:autoLibraryAt.ContainsKey($id) -and ($now - $script:autoLibraryAt[$id]).TotalSeconds -lt 10) { continue }
     $script:autoLibraryAt[$id] = $now
 
-    $isFirst = ($id -eq [string]$cands[0].M)
     $title = ''; $dur = ''; $cover = $null
     if ($playerInfo) {
       $title = $playerInfo.Description
