@@ -469,9 +469,19 @@ function Load-Library {
   if (-not (Test-Path -LiteralPath $script:LibraryFile)) { return }
   try {
     $j = Get-Content -LiteralPath $script:LibraryFile -Raw | ConvertFrom-Json
+    $epoch = [DateTime]::MinValue
+    $epochFile = Join-Path $PSScriptRoot 'work\cache_epoch.txt'
+    if (Test-Path -LiteralPath $epochFile) {
+      try { $epoch = [DateTime]::Parse((Get-Content -LiteralPath $epochFile -Raw).Trim(), [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime() } catch { }
+    }
     $dirty = $false
     foreach ($e in @($j.entries)) {
       if (-not $e -or -not $e.id) { continue }
+      if ($epoch -gt [DateTime]::MinValue) {
+        $eu = [DateTime]::MinValue
+        if ($e.updated) { try { $eu = [DateTime]::Parse([string]$e.updated, [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime() } catch { } }
+        if ($eu -lt $epoch) { $dirty = $true; continue }
+      }
       if ($e.source -eq 'player' -and ($e.title -or $e.cover -or $e.duration)) {
         # 旧版本把播放器标题/截图按时间顺序贴到了某个 ID 上；这些字段不可信，清空等卡片/手动绑定
         $e | Add-Member -NotePropertyName title -NotePropertyValue '' -Force
@@ -1026,6 +1036,13 @@ function Update-Hud {
       $script:cardMedia = @{}
       $script:autoLibraryAt = @{}
       $script:suppressLibraryUntil = (Get-Date).AddSeconds(5)
+      try {
+        [System.IO.File]::WriteAllText($FlowsFile, '')
+        $script:flowOffset = [long]0
+        $script:flowTail = ''
+      } catch {
+        $script:flowOffset = [long](Get-Item -LiteralPath $FlowsFile -ErrorAction SilentlyContinue).Length
+      }
       $script:filesByDuration = @{}
       $script:lastCard = $null
       $script:lastTipCard = $null

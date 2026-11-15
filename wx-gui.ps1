@@ -13,6 +13,7 @@ if (-not $IndexFile) { $IndexFile = Join-Path $PSScriptRoot 'work\hud_index.json
 if (-not $OutDir) { $OutDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) '视频号' }
 if (-not $ToolScript) { $ToolScript = Join-Path $PSScriptRoot 'wx-dl.ps1' }
 $Work = Join-Path $PSScriptRoot 'work'
+$FlowsFile = Join-Path $PSScriptRoot 'flows.log'
 
 if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
   Write-Host "需要 STA：请用 wx-gui.vbs 启动，或 pwsh -Sta -File wx-gui.ps1" -ForegroundColor Yellow
@@ -167,10 +168,36 @@ $script:UiLogLines = New-Object System.Collections.Generic.List[string]
 $script:PendingFile = Join-Path $Work 'pending.json'
 $script:PendingIds = @{}
 $script:LibraryStamp = [DateTime]::MinValue
+$script:CacheEpochFile = Join-Path $Work 'cache_epoch.txt'
+$script:CacheEpoch = [DateTime]::MinValue
 
 function Write-GuiLog([string]$msg) {
   try { Add-Content -LiteralPath $script:GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -Encoding utf8 } catch { }
   if (Get-Command Add-UiLog -ErrorAction SilentlyContinue) { Add-UiLog $msg }
+}
+
+function Load-CacheEpoch {
+  $script:CacheEpoch = [DateTime]::MinValue
+  if (-not (Test-Path -LiteralPath $script:CacheEpochFile)) { return }
+  try {
+    $s = (Get-Content -LiteralPath $script:CacheEpochFile -Raw).Trim()
+    if ($s) { $script:CacheEpoch = [DateTime]::Parse($s, [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime() }
+  } catch { }
+}
+
+function Set-CacheEpoch {
+  $now = [DateTime]::UtcNow
+  try { Set-Content -LiteralPath $script:CacheEpochFile -Value $now.ToString('o') -Encoding utf8 } catch { }
+  $script:CacheEpoch = $now
+}
+
+function Test-AfterEpoch([string]$iso) {
+  if ($script:CacheEpoch -le [DateTime]::MinValue) { return $true }
+  if (-not $iso) { return $false }
+  try {
+    $t = [DateTime]::Parse($iso, [Globalization.CultureInfo]::InvariantCulture).ToUniversalTime()
+    return ($t -ge $script:CacheEpoch)
+  } catch { return $false }
 }
 
 function Load-Pending {
@@ -395,6 +422,7 @@ function Load-Rows {
       $lib = Get-Content -LiteralPath $LibraryFile -Raw | ConvertFrom-Json
       foreach ($e in @($lib.entries | Sort-Object -Property updated -Descending)) {
         if (-not $e.id) { continue }
+        if (-not (Test-AfterEpoch ([string]$e.updated))) { continue }
         $row = New-Row $e '（无标题）'
         $rows.Add($row)
         $seenIds[[string]$e.id] = $true
@@ -410,6 +438,7 @@ function Load-Rows {
       $idx = Get-Content -LiteralPath $IndexFile -Raw | ConvertFrom-Json
       foreach ($e in @($idx.entries | Sort-Object time -Descending)) {
         if (-not $e.file -or -not (Test-Path -LiteralPath $e.file)) { continue }
+        if (-not (Test-AfterEpoch ([string]$e.time))) { continue }
         if ($seenFiles.ContainsKey($e.file.ToLower())) { continue }
         $fake = [pscustomobject]@{
           id = [string]$e.m; title = '（历史记录，无标题）'; duration = [string]$e.duration
@@ -451,6 +480,7 @@ function Sync-Library {
   $changed = $false
   foreach ($e in @($lib.entries)) {
     if (-not $e.id) { continue }
+    if (-not (Test-AfterEpoch ([string]$e.updated))) { continue }
     $id = [string]$e.id
     if ($byId.ContainsKey($id)) {
       $row = $byId[$id]
@@ -868,6 +898,7 @@ function Clear-Cache {
   }
   Remove-Item -LiteralPath $flag -ErrorAction SilentlyContinue
 
+  Set-CacheEpoch
   $rows.Clear()
   $script:PendingIds = @{}
   $script:AutoAttempted = @{}
@@ -889,6 +920,7 @@ function Clear-Cache {
     (Join-Path $Work 'err.txt')
   )
   foreach ($f in $files) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+  try { [System.IO.File]::WriteAllText($FlowsFile, '') } catch { }
   Get-ChildItem -LiteralPath (Join-Path $Work 'covers') -File -ErrorAction SilentlyContinue |
     Remove-Item -Force -ErrorAction SilentlyContinue
   Get-ChildItem -LiteralPath (Join-Path $Work 'headers') -Directory -ErrorAction SilentlyContinue |
@@ -922,6 +954,7 @@ function Update-Count {
     default { $listenBlock.Text = '监听：…'; $listenBlock.Foreground = $grey }
   }
 }
+Load-CacheEpoch
 Load-Pending
 Load-Rows
 Write-GuiLog "gui-start library=$LibraryFile"
