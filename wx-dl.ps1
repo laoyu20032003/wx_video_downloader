@@ -1,4 +1,4 @@
-﻿<#
+<#
   wx-dl.ps1 —— 微信视频号（4.2 liteapp）一键下载/修复工具
 
   用法：
@@ -28,6 +28,7 @@ param(
   [switch]$Hud,
   [string]$SaveUrl = "",
   [string]$SaveTag = "",
+  [int]$ExpectedDuration = 0,
   [switch]$NoPreflight
 )
 
@@ -384,7 +385,7 @@ function Get-HeaderInfo([byte[]]$header) {
 function Test-UrlHeaderPair([string]$url, [long]$offset) {
   $tmp = Join-Path $Work 'probe16.bin'
   try {
-    $code = & $Curl -s -m 20 --noproxy '*' --max-filesize 4096 -r "$offset-$($offset + 15)" -o $tmp -w '%{http_code}' `
+    $code = & $Curl -s -m 4 --noproxy '*' --max-filesize 4096 -r "$offset-$($offset + 15)" -o $tmp -w '%{http_code}' `
       -H 'Referer: https://liteapp.weixin.qq.com/' `
       -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' $url 2>$null
     $code = "$code".Trim()
@@ -407,9 +408,14 @@ function Test-UrlHeaderPreflight([string]$url, [int]$enclen, [long]$total) {
   $tmp = Join-Path $Work 'preflight_header.bin'
   $seen = @{}
   $probeable = 0
+  $probes = 0
+  $deadline = (Get-Date).AddSeconds(10)
+  $timedOut = $false
   try {
     foreach ($p in $procs) {
+      if ($timedOut) { break }
       foreach ($a in [MemScan]::Scan([int]$p.ProcessId, 20)) {
+        if ($timedOut) { break }
         if ($a -lt 0) { continue }
         if (-not [MemScan]::Dump([int]$p.ProcessId, [long]$a, 131072, $tmp)) { continue }
         $h = [System.IO.File]::ReadAllBytes($tmp)
@@ -421,7 +427,9 @@ function Test-UrlHeaderPreflight([string]$url, [int]$enclen, [long]$total) {
         if ($info.MoovEnd -le 0) { continue }
 
         if ($info.MoovEnd -ge $enclen) {
+          if ((Get-Date) -ge $deadline -or $probes -ge 5) { $timedOut = $true; break }
           $probeable++
+          $probes++
           if (Test-UrlHeaderPair $url $info.MoovEnd) {
             return [pscustomobject]@{ Status = 'match'; MoovEnd = $info.MoovEnd }
           }
@@ -437,12 +445,13 @@ function Test-UrlHeaderPreflight([string]$url, [int]$enclen, [long]$total) {
   } catch { }
   finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
 
+  if ($seen.Count -eq 0) { return [pscustomobject]@{ Status = 'noheaders'; Reason = '内存里还没有文件头' } }
   if ($probeable -eq 0) { return [pscustomobject]@{ Status = 'skip'; Reason = '没有可探测的头' } }
+  if ($timedOut) { return [pscustomobject]@{ Status = 'mismatch'; Reason = '预检超时，地址与头未配对' } }
   return [pscustomobject]@{ Status = 'mismatch'; Reason = '地址与所有内存头都不配对' }
 }
 
-function Invoke-Fix([string]$url, [string]$tag) {
-  $cipher = Join-Path $Work "cipher_$tag.bin"
+function Invoke-Fix([string]$url, [string]$tag) {  $cipher = Join-Path $Work "cipher_$tag.bin"
   $candidate = Join-Path $Work "cand_$tag.mp4"
   $prefix = Join-Path $Work "prefix_$tag.bin"
   $errFile = Join-Path $Work 'err.txt'
@@ -455,7 +464,12 @@ function Invoke-Fix([string]$url, [string]$tag) {
   $enclen = $head.Enclen
   if (-not $NoPreflight -and ($head.Code -eq 200 -or $head.Code -eq 206)) {
     Write-Step "Range 预检：地址与内存头配对 ..."
-    $pre = Test-UrlHeaderPreflight $url $enclen $head.Total
+    $pre = $null
+    for ($attempt = 0; $attempt -lt 4; $attempt++) {
+      $pre = Test-UrlHeaderPreflight $url $enclen $head.Total
+      if ($pre.Status -ne 'noheaders') { break }
+      Start-Sleep -Seconds 1
+    }
     if ($pre.Status -eq 'mismatch') {
       Write-Host "  预检失败：$($pre.Reason)，不下载密文（避免下错整条）" -ForegroundColor Red
       return $null
@@ -558,6 +572,10 @@ function Invoke-Fix([string]$url, [string]$tag) {
       }
       catch { $dur = 0 }
       if (-not $dur -or $dur -le 1) { continue }
+      if ($ExpectedDuration -gt 0 -and [Math]::Abs($dur - $ExpectedDuration) -gt 3) {
+        Write-Warn ("  跳过候选 pid={0} 0x{1:X}：时长 {2:N1}s 与卡片 {3}s 不符" -f $p.ProcessId, [long]$a, $dur, $ExpectedDuration)
+        continue
+      }
 
       $probeOk = $true
       try {

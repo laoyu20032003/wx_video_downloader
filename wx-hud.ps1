@@ -699,10 +699,13 @@ function Start-CandidateSave {
   Update-LibraryEntry @{ id = $m.M; status = 'downloading' }
   Remove-Item -LiteralPath $script:saveOut, $script:saveErr -ErrorAction SilentlyContinue
   try {
-    $script:saveProc = Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
+    $saveArgs = @(
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolScript,
       '-SaveUrl', $m.Url, '-SaveTag', $m.M, '-OutDir', $OutDir
-    ) -RedirectStandardOutput $script:saveOut -RedirectStandardError $script:saveErr
+    )
+    $expected = ConvertTo-Seconds $script:saveDur
+    if ($expected -gt 0) { $saveArgs += @('-ExpectedDuration', [string]$expected) }
+    $script:saveProc = Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -PassThru -ArgumentList $saveArgs -RedirectStandardOutput $script:saveOut -RedirectStandardError $script:saveErr
     $script:saving = $true
     Set-Notice ("保存中… ($($script:saveCursor + 1)/$($script:saveTotal))") 300
     Write-HudLog ("save-try $($script:saveCursor + 1)/$($script:saveTotal) m=$($m.M) urlLen=$($m.Url.Length)")
@@ -1147,28 +1150,39 @@ function Update-Hud {
           }
           Write-HudLog ("bind card=$ckey m=$($hits[0].M)")
 
-          # 记录到视频库：封面截图 + 标题/时长/URL/大小/分辨率/状态
-          $coverPath = if ($usedFallback) { $null } else { Save-CardCover $hitCard $hits[0].M }
-          $size = Get-MediaSize $hits[0].Url
+          # 先把条目写进库，后面的封面/大小查询再慢也不能让 hover 白触发
           $idx = Get-IndexedEntry $hitCard $null
-          $libStatus = if ($idx) { 'downloaded' } elseif ($size -gt 0) { 'available' } else { 'needs-replay' }
-          $info = if ($idx -and (Test-Path -LiteralPath $idx.file)) { Get-VideoInfo $idx.file } else { $null }
-          $finalSize = 0; $fw = 0; $fh = 0
-          if ($info) { $finalSize = [long]$info.size; $fw = [int]$info.width; $fh = [int]$info.height }
-          elseif ($size -gt 0) { $finalSize = [long]$size }
+          $libStatus = if ($idx) { 'downloaded' } else { 'available' }
           $fields = @{
             id = $hits[0].M
             duration = $hitCard.Duration
             url = $hits[0].Url
-            cover = $coverPath
-            size = $finalSize
-            width = $fw
-            height = $fh
+            cover = ''
+            size = 0
+            width = 0
+            height = 0
             status = $libStatus
             source = 'card'
           }
           if ($idx -and $idx.file) { $fields.file = $idx.file }
           Update-LibraryEntry $fields
+
+          # 再补截图、文件大小、分辨率
+          $coverPath = if ($usedFallback) { $null } else { Save-CardCover $hitCard $hits[0].M }
+          $size = Get-MediaSize $hits[0].Url
+          $info = if ($idx -and (Test-Path -LiteralPath $idx.file)) { Get-VideoInfo $idx.file } else { $null }
+          $finalSize = 0; $fw = 0; $fh = 0
+          if ($info) { $finalSize = [long]$info.size; $fw = [int]$info.width; $fh = [int]$info.height }
+          elseif ($size -gt 0) { $finalSize = [long]$size }
+          if ($coverPath -or $finalSize -gt 0) {
+            Update-LibraryEntry @{
+              id = $hits[0].M
+              cover = $coverPath
+              size = $finalSize
+              width = $fw
+              height = $fh
+            }
+          }
         }
       }
     }

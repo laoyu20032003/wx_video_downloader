@@ -718,11 +718,14 @@ function Invoke-RowAction($row, [switch]$Auto) {
   $row.ActionText = '…'
   $row.CanAct = $false
   Write-GuiLog ("download-start id=$($row.Id) auto=$([bool]$Auto)")
+  $expectedSec = Convert-DurationText $row.Duration
+  $dlArgs = @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolScript,
+    '-SaveUrl', $row.Url, '-SaveTag', $tag, '-OutDir', $OutDir
+  )
+  if ($expectedSec -gt 0) { $dlArgs += @('-ExpectedDuration', [string]$expectedSec) }
   try {
-    $proc = Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolScript,
-      '-SaveUrl', $row.Url, '-SaveTag', $tag, '-OutDir', $OutDir
-    ) -RedirectStandardOutput $out -RedirectStandardError $err
+    $proc = Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -PassThru -ArgumentList $dlArgs -RedirectStandardOutput $out -RedirectStandardError $err
     Set-RowPending $row $false
     $script:Jobs[$proc.Id] = [pscustomobject]@{ Row = $row; Out = $out; Err = $err; Proc = $proc; Phase = '匹配中…'; Auto = [bool]$Auto }
   } catch {
