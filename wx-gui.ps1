@@ -2,7 +2,9 @@
   [string]$LibraryFile = "",
   [string]$IndexFile = "",
   [string]$OutDir = "",
-  [string]$ToolScript = ""
+  [string]$ToolScript = "",
+  [int]$Port = 8898,
+  [switch]$NoStartListener
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -103,6 +105,110 @@ $white = [System.Windows.Media.Brushes]::White
 
 $rows = New-Object System.Collections.ObjectModel.ObservableCollection[object]
 $script:Jobs = @{}
+$script:ListenerProc = $null
+$script:ListenerOwned = $false
+$script:ListenerState = 'idle'
+$script:ProxyApplied = $false
+$script:HudPidFile = Join-Path $Work 'hud.pid'
+$script:ProxySnapshot = Join-Path $Work 'proxy_snapshot.json'
+$script:GuiLog = Join-Path $Work 'gui.log'
+
+function Write-GuiLog([string]$msg) {
+  try { Add-Content -LiteralPath $script:GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -Encoding utf8 } catch { }
+}
+
+function Test-ListenerPort {
+  [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+}
+
+function Start-Listener {
+  if ($NoStartListener) {
+    $script:ListenerState = 'disabled'
+    return
+  }
+  if (Test-ListenerPort) {
+    $script:ListenerOwned = $false
+    $script:ListenerState = 'external'
+    Write-GuiLog "attach existing listener on $Port"
+    return
+  }
+  try {
+    $hostExe = (Get-Process -Id $PID).Path
+    if (-not $hostExe) { $hostExe = 'pwsh' }
+    $out = Join-Path $Work 'gui_listener.out'
+    $err = Join-Path $Work 'gui_listener.err'
+    Remove-Item -LiteralPath $out, $err -ErrorAction SilentlyContinue
+    $script:ListenerProc = Start-Process -FilePath $hostExe -WindowStyle Hidden -PassThru -ArgumentList @(
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolScript,
+      '-NoAuto', '-Hud', '-OutDir', $OutDir, '-Port', "$Port"
+    ) -RedirectStandardOutput $out -RedirectStandardError $err
+    $script:ListenerOwned = $true
+    $script:ListenerState = 'starting'
+    Write-GuiLog "listener started pid=$($script:ListenerProc.Id)"
+  } catch {
+    $script:ListenerState = 'failed'
+    Write-GuiLog ("listener start failed: " + $_.Exception.Message)
+  }
+}
+
+function Stop-Listener {
+  if (-not $script:ListenerOwned) { return }
+  try {
+    if ($script:ListenerProc -and -not $script:ListenerProc.HasExited) {
+      Stop-Process -Id $script:ListenerProc.Id -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path -LiteralPath $script:HudPidFile) {
+      $hp = [int](Get-Content -LiteralPath $script:HudPidFile -Raw)
+      if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue }
+      Remove-Item -LiteralPath $script:HudPidFile -ErrorAction SilentlyContinue
+    }
+    Write-GuiLog "listener stopped"
+  } catch { }
+}
+
+function Set-ListenerProxy {
+  try {
+    $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+    Set-ItemProperty $reg -Name ProxyEnable -Value 1
+    Set-ItemProperty $reg -Name ProxyServer -Value ("127.0.0.1:" + $Port)
+    if (-not ('WinInetGuiX' -as [type])) {
+      Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public class WinInetGuiX {
+  [DllImport("wininet.dll", SetLastError=true)] public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l);
+}
+'@
+    }
+    [WinInetGuiX]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+    [WinInetGuiX]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
+    $script:ProxyApplied = $true
+    Write-GuiLog ("proxy set to 127.0.0.1:$Port")
+  } catch {
+    Write-GuiLog ("proxy set failed: " + $_.Exception.Message)
+  }
+}
+
+function Update-ListenerStatus {
+  if ($script:ListenerState -eq 'disabled') { return }
+  if ($script:ListenerOwned -and $script:ListenerProc -and $script:ListenerProc.HasExited) {
+    $script:ListenerState = 'failed'
+    return
+  }
+  if (Test-ListenerPort) {
+    $script:ListenerState = if ($script:ListenerOwned) { 'running' } else { 'external' }
+    if ($script:ListenerOwned -and -not $script:ProxyApplied) { Set-ListenerProxy }
+    $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+    $current = [string](Get-ItemProperty $reg -ErrorAction SilentlyContinue).ProxyServer
+    if ($script:ListenerOwned -and $current -ne ("127.0.0.1:" + $Port)) {
+      $script:ListenerState = 'proxy-mismatch'
+    }
+  } elseif ($script:ListenerOwned) {
+    $script:ListenerState = 'starting'
+  } else {
+    $script:ListenerState = 'stopped'
+  }
+}
 
 function New-Row($entry, [string]$fallbackTitle) {
   $file = [string]$entry.file
@@ -304,6 +410,12 @@ $countBlock.VerticalAlignment = 'Center'
 $countBlock.Margin = New-Object System.Windows.Thickness(0, 3, 0, 0)
 $top.Children.Add($countBlock) | Out-Null
 
+$listenBlock = New-Object System.Windows.Controls.TextBlock
+$listenBlock.Foreground = $grey
+$listenBlock.VerticalAlignment = 'Center'
+$listenBlock.Margin = New-Object System.Windows.Thickness(18, 3, 0, 0)
+$top.Children.Add($listenBlock) | Out-Null
+
 $refreshBtn = New-Object System.Windows.Controls.Button
 $refreshBtn.Content = '刷新'
 $refreshBtn.Margin = New-Object System.Windows.Thickness(18, 0, 0, 0)
@@ -403,13 +515,26 @@ $window.Content = $root
 function Update-Count {
   $done = @($rows | Where-Object { $_.StatusText -eq '已下载' }).Count
   $countBlock.Text = "共 $($rows.Count) 条 · 已下载 $done"
+  switch ($script:ListenerState) {
+    'starting' { $listenBlock.Text = '监听：启动中…'; $listenBlock.Foreground = $amber }
+    'running' { $listenBlock.Text = '监听：运行中'; $listenBlock.Foreground = $green }
+    'external' { $listenBlock.Text = '监听：复用已有'; $listenBlock.Foreground = $green }
+    'proxy-mismatch' { $listenBlock.Text = '监听：代理被改回'; $listenBlock.Foreground = $amber }
+    'failed' { $listenBlock.Text = '监听：启动失败'; $listenBlock.Foreground = $red }
+    'stopped' { $listenBlock.Text = '监听：未启动'; $listenBlock.Foreground = $red }
+    'disabled' { $listenBlock.Text = '监听：已禁用'; $listenBlock.Foreground = $grey }
+    default { $listenBlock.Text = '监听：…'; $listenBlock.Foreground = $grey }
+  }
 }
 Load-Rows
+Start-Listener
 Update-Count
 
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(600)
 $timer.Add_Tick({
+  Update-ListenerStatus
+  Update-Count
   foreach ($id in @($script:Jobs.Keys)) {
     $job = $script:Jobs[$id]
     if (-not $job.Proc.HasExited) { continue }
@@ -437,5 +562,5 @@ $timer.Add_Tick({
 })
 $timer.Start()
 
-$window.Add_Closed({ $timer.Stop() })
+$window.Add_Closed({ $timer.Stop(); Stop-Listener })
 $window.ShowDialog() | Out-Null
