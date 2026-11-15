@@ -116,6 +116,7 @@ $script:ProxySnapshot = Join-Path $Work 'proxy_snapshot.json'
 $script:GuiLog = Join-Path $Work 'gui.log'
 $script:PendingFile = Join-Path $Work 'pending.json'
 $script:PendingIds = @{}
+$script:LibraryStamp = [DateTime]::MinValue
 
 function Write-GuiLog([string]$msg) {
   try { Add-Content -LiteralPath $script:GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -Encoding utf8 } catch { }
@@ -283,6 +284,7 @@ function New-Row($entry, [string]$fallbackTitle) {
     'downloaded' { '已下载' }
     'downloading' { '下载中…' }
     'available' { '可下载' }
+    'played' { '已播放' }
     'needs-replay' { '需重播' }
     default { '需重播' }
   }
@@ -290,6 +292,7 @@ function New-Row($entry, [string]$fallbackTitle) {
     'downloaded' { $green }
     'downloading' { $blue }
     'available' { $amber }
+    'played' { $grey }
     default { $red }
   }
 
@@ -353,6 +356,51 @@ function Load-Rows {
       }
     } catch { }
   }
+  try {
+    $script:LibraryStamp = if (Test-Path -LiteralPath $LibraryFile) {
+      (Get-Item -LiteralPath $LibraryFile).LastWriteTimeUtc
+    } else { [DateTime]::MinValue }
+  } catch { }
+}
+
+function Sync-Library {
+  if (-not (Test-Path -LiteralPath $LibraryFile)) { return }
+  try { $stamp = (Get-Item -LiteralPath $LibraryFile).LastWriteTimeUtc } catch { return }
+  if ($stamp -eq $script:LibraryStamp) { return }
+  $script:LibraryStamp = $stamp
+  try { $lib = Get-Content -LiteralPath $LibraryFile -Raw | ConvertFrom-Json } catch { return }
+
+  $byId = @{}
+  foreach ($r in $rows) { if ($r.Id) { $byId[$r.Id] = $r } }
+  $changed = $false
+  foreach ($e in @($lib.entries)) {
+    if (-not $e.id) { continue }
+    $id = [string]$e.id
+    if ($byId.ContainsKey($id)) {
+      $row = $byId[$id]
+      if ($row.Pending -or $row.StatusText -eq '下载中…') { continue }
+      $fresh = New-Row $e '（无标题）'
+      $row.Title = $fresh.Title
+      $row.Duration = $fresh.Duration
+      $row.SizeText = $fresh.SizeText
+      $row.Resolution = $fresh.Resolution
+      $row.Url = $fresh.Url
+      $row.CoverImage = $fresh.CoverImage
+      if ($fresh.File -or -not $row.File) {
+        $row.File = $fresh.File
+        $row.StatusText = $fresh.StatusText
+        $row.StatusBrush = $fresh.StatusBrush
+        $row.ActionText = $fresh.ActionText
+      }
+      $changed = $true
+    } else {
+      $row = New-Row $e '（无标题）'
+      $rows.Insert(0, $row)
+      $byId[$id] = $row
+      $changed = $true
+    }
+  }
+  if ($changed) { Update-Count }
 }
 
 function Save-LibraryPatch($row) {
@@ -632,6 +680,7 @@ function Check-Pending {
 $timer.Add_Tick({
   Update-ListenerStatus
   Update-Count
+  Sync-Library
   Check-Pending
   foreach ($id in @($script:Jobs.Keys)) {
     $job = $script:Jobs[$id]

@@ -558,6 +558,125 @@ function Get-VideoInfo([string]$file) {
   } catch { return $null }
 }
 
+$script:playerInfoCache = $null
+$script:playerInfoAt = [DateTime]::MinValue
+function Get-PlayerInfo {
+  $now = Get-Date
+  if (($now - $script:playerInfoAt).TotalSeconds -lt 1.5) { return $script:playerInfoCache }
+  $script:playerInfoAt = $now
+  $result = $null
+  try {
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
+      [System.Windows.Automation.Condition]::TrueCondition)
+    $textCond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Text)
+    foreach ($w in $wins) {
+      try {
+        $wpid = $w.Current.ProcessId
+        $proc = Get-Process -Id $wpid -ErrorAction SilentlyContinue
+        if (-not $proc -or @('Weixin', 'WeChatAppEx') -notcontains $proc.ProcessName) { continue }
+        $rect = $w.Current.BoundingRectangle
+        if ($rect.Width -lt 300 -or $rect.Height -lt 200) { continue }
+        $texts = $w.FindAll([System.Windows.Automation.TreeScope]::Descendants, $textCond)
+        $dur = ''; $secs = 0; $desc = ''
+        foreach ($t in $texts) {
+          try {
+            $name = [string]$t.Current.Name
+            if ($name -match '^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*/\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$') {
+              $dur = (($name -split '/')[-1]).Trim()
+              $a = [int]$matches[1] * 60 + [int]$matches[2]
+              if ($matches[3]) { $a = $a * 60 + [int]$matches[3] }
+              $b = [int]$matches[4] * 60 + [int]$matches[5]
+              if ($matches[6]) { $b = $b * 60 + [int]$matches[6] }
+              $secs = $b
+            } elseif ($name.Length -gt $desc.Length -and $t.Current.BoundingRectangle.Width -ge 120) {
+              $desc = $name
+            }
+          } catch { }
+        }
+        if ($secs -gt 0) {
+          $result = [pscustomobject]@{
+            Rect = $rect; Duration = $dur; Seconds = $secs; Description = $desc
+          }
+          break
+        }
+      } catch { }
+    }
+  } catch { }
+  $script:playerInfoCache = $result
+  return $result
+}
+
+function Save-PlayerCover($info, [string]$id) {
+  try {
+    if (-not $info -or -not $info.Rect) { return $null }
+    $dir = Join-Path $PSScriptRoot 'work\covers'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $safe = ($id -replace '[^0-9A-Za-z_-]', '')
+    $path = Join-Path $dir ($safe + '-player.png')
+    if (Test-Path -LiteralPath $path) { return $path }
+    $r = $info.Rect
+    $x = [int]$r.X; $y = [int]$r.Y; $w = [int]$r.Width; $h = [int]$r.Height
+    $vx = [int][System.Windows.SystemParameters]::VirtualScreenLeft
+    $vy = [int][System.Windows.SystemParameters]::VirtualScreenTop
+    $vw = [int][System.Windows.SystemParameters]::VirtualScreenWidth
+    $vh = [int][System.Windows.SystemParameters]::VirtualScreenHeight
+    if ($x -lt $vx) { $w -= ($vx - $x); $x = $vx }
+    if ($y -lt $vy) { $h -= ($vy - $y); $y = $vy }
+    if ($x + $w -gt $vx + $vw) { $w = $vx + $vw - $x }
+    if ($y + $h -gt $vy + $vh) { $h = $vy + $vh - $y }
+    if ($w -le 0 -or $h -le 0) { return $null }
+    $bmp = New-Object System.Drawing.Bitmap($w, $h)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($x, $y, 0, 0, $bmp.Size)
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $g.Dispose(); $bmp.Dispose()
+    return $path
+  } catch { return $null }
+}
+
+$script:autoLibraryAt = @{}
+function Update-PlayedLibrary($card, $playerInfo) {
+  # 卡片页由悬停绑定精确写入；这里只负责播放窗口里“点开/播放过”的视频
+  if ($card) { return }
+  $cands = @(Get-MediaCandidates 8)
+  if ($cands.Count -eq 0) { return }
+  $now = Get-Date
+  foreach ($c in $cands) {
+    if (-not $c.First) { continue }
+    if (($now - $c.First).TotalMinutes -gt 15) { continue }
+    $id = [string]$c.M
+    if (-not $id) { continue }
+    if ($script:Library.ContainsKey($id)) { continue }
+    if ($script:autoLibraryAt.ContainsKey($id) -and ($now - $script:autoLibraryAt[$id]).TotalSeconds -lt 10) { continue }
+    $script:autoLibraryAt[$id] = $now
+
+    $isFirst = ($id -eq [string]$cands[0].M)
+    $title = ''; $dur = ''; $cover = $null
+    if ($playerInfo) {
+      $title = $playerInfo.Description
+      $dur = $playerInfo.Duration
+      $cover = Save-PlayerCover $playerInfo $id
+      if (-not $isFirst) {
+        if (-not $title) { $title = '视频号视频' }
+        $title = '（预加载）' + $title
+        $dur = '—'
+      }
+    }
+    if (-not $title) { $title = '（播放过的视频）' }
+    $size = Get-MediaSize $c.Url
+    $status = if ($size -gt 0) { 'available' } else { 'played' }
+    Update-LibraryEntry @{
+      id = $id; title = $title; duration = $dur; url = $c.Url; cover = $cover
+      size = $size; width = 0; height = 0; status = $status
+    }
+    Start-HeaderDump $id
+    Write-HudLog ("library-auto id=$id card=$([bool]$card) player=$([bool]$playerInfo) size=$size")
+  }
+}
+
 function Start-Save {
   if ($script:saving) { Set-Notice "正在保存上一条，请稍候" 2; return }
   $pt = New-Object HudNative+POINT
@@ -962,7 +1081,11 @@ function Update-Hud {
     $progress = if ($script:saving) { Get-SaveProgress } else { '' }
 
     $p = Get-WeChatHost
-    if (-not $p) { Hide-Hud; Hide-Badges; return }
+    if (-not $p) {
+      Update-PlayedLibrary $null (Get-PlayerInfo)
+      Hide-Hud; Hide-Badges
+      return
+    }
 
     if (-not $ForceShow -and -not $isWeChatFg) {
       if ($noticeActive) {
@@ -999,6 +1122,7 @@ function Update-Hud {
       [void][HudNative]::GetCursorPos([ref]$pt)
     }
     $card = Get-CardHit $script:cards $pt.X $pt.Y
+    Update-PlayedLibrary $card $null
     $hitCard = $card
     if ($hitCard) {
       $ckey = Get-CardKey $hitCard
