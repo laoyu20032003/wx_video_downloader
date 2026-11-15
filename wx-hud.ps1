@@ -1197,9 +1197,13 @@ function Update-Hud {
       }
       if ($needBind) {
         Write-HudLog ("hover-dwell key=$ckey age=$([math]::Round($hoverAge,1)) fallback=$usedFallback")
-        $hits = @(Get-MediaCandidates 5 |
+        $all = @(Get-MediaCandidates 8 |
           Where-Object { $_.First -ge $script:hoverStart.AddSeconds(-0.3) } |
           Sort-Object -Property First)
+        Write-HudLog ("hover-cands " + (($all | ForEach-Object { "$($_.M)@$($_.MaxEnd)#$($_.HasM)" }) -join ','))
+        $withM = @($all | Where-Object { $_.HasM })
+        $hits = if ($withM.Count -gt 0) { $withM } else { $all }
+        $hits = @($hits | Sort-Object -Property @{ Expression = { $_.MaxEnd }; Descending = $true }, First | Select-Object -First 5)
         if ($hits.Count -gt 0) {
           $script:cardMedia[$ckey] = [pscustomobject]@{
             M = $hits[0].M; Url = $hits[0].Url; Time = Get-Date; Duration = $hitCard.Duration
