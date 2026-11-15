@@ -811,6 +811,10 @@ function Bind-PlayerToSelected {
         $e | Add-Member -NotePropertyName duration -NotePropertyValue $d -Force
         $e | Add-Member -NotePropertyName source -NotePropertyValue 'manual' -Force
         $e | Add-Member -NotePropertyName updated -NotePropertyValue ((Get-Date).ToString('o')) -Force
+        $coverPath = [string]$p.cover
+        if ($coverPath -and (Test-Path -LiteralPath $coverPath)) {
+          $e | Add-Member -NotePropertyName cover -NotePropertyValue $coverPath -Force
+        }
         $found = $true
       }
     }
@@ -821,6 +825,10 @@ function Bind-PlayerToSelected {
       Move-Item -LiteralPath $tmp -Destination $LibraryFile -Force
       $row.Title = $t
       $row.Duration = $d
+      if ($coverPath -and (Test-Path -LiteralPath $coverPath)) {
+        $img = Load-Bitmap $coverPath
+        if ($img) { $row.CoverImage = $img }
+      }
       Write-GuiLog ("manual-bind id=$($row.Id) title=$t")
     }
   } catch { }

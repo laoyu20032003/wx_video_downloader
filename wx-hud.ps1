@@ -466,9 +466,19 @@ function Load-Library {
   if (-not (Test-Path -LiteralPath $script:LibraryFile)) { return }
   try {
     $j = Get-Content -LiteralPath $script:LibraryFile -Raw | ConvertFrom-Json
+    $dirty = $false
     foreach ($e in @($j.entries)) {
-      if ($e -and $e.id) { $script:Library[[string]$e.id] = $e }
+      if (-not $e -or -not $e.id) { continue }
+      if ($e.source -eq 'player' -and ($e.title -or $e.cover -or $e.duration)) {
+        # 旧版本把播放器标题/截图按时间顺序贴到了某个 ID 上；这些字段不可信，清空等卡片/手动绑定
+        $e | Add-Member -NotePropertyName title -NotePropertyValue '' -Force
+        $e | Add-Member -NotePropertyName duration -NotePropertyValue '' -Force
+        $e | Add-Member -NotePropertyName cover -NotePropertyValue '' -Force
+        $dirty = $true
+      }
+      $script:Library[[string]$e.id] = $e
     }
+    if ($dirty) { Save-Library }
   } catch { }
 }
 
@@ -625,129 +635,58 @@ function Save-PlayerCover($info, [string]$id) {
 
 $script:autoLibraryAt = @{}
 $script:lastPlayerKey = ''
-$script:currentMediaId = ''
 function Update-PlayedLibrary($card, $playerInfo) {
   # 卡片页由悬停绑定精确写入；这里只负责播放窗口里“点开/播放过”的视频
   if ($card) { return }
-  $cands = @(Get-MediaCandidates 20)
-  if ($cands.Count -eq 0) { return }
   $now = Get-Date
 
-  # 播放器标题/时长发生变化时，把“新标题”绑定到刚刚开始/正在下载最多的那条媒体
+  # 播放器信息只用于顶部“当前播放”和手动绑定，不自动贴到任意媒体 ID 上
   if ($playerInfo) {
     $cap = [string]$playerInfo.Description
     $dur = [string]$playerInfo.Duration
-    try {
-      [pscustomobject]@{
-        title = $cap; duration = $dur; seconds = [int]$playerInfo.Seconds
-        updated = (Get-Date).ToString('o')
-      } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'work\player.json') -Encoding utf8
-    } catch { }
     $key = $cap + '|' + $dur
-    $isNew = $key -and ($script:lastPlayerKey -eq '' -or $key -ne $script:lastPlayerKey)
-    if ($isNew) {
-      $capSec = ConvertTo-Seconds $dur
-      $known = @($script:Library.Values | Where-Object {
-          $_.source -eq 'card' -and $_.title -and $_.title.Trim() -eq $cap.Trim() -and
-          (ConvertTo-Seconds ([string]$_.duration)) -eq $capSec
-        })
-      $mapped = $false
-      if ($known.Count -eq 1) {
-        $pid2 = [string]$known[0].id
-        $match = @($cands | Where-Object { [string]$_.M -eq $pid2 } | Select-Object -First 1)
-        $url = if ($match.Count -gt 0) { $match[0].Url } else { [string]$known[0].url }
-        $script:currentMediaId = $pid2
-        $fields = @{ id = $pid2; title = $cap; duration = $dur; url = $url }
-        if (-not $known[0].cover -and $playerInfo) { $fields.cover = Save-PlayerCover $playerInfo $pid2 }
-        if ($match.Count -gt 0) {
-          $msize = Get-MediaSize $url
-          if ($msize -gt 0) { $fields.size = $msize }
-        }
-        Update-LibraryEntry $fields
-        Write-HudLog ("player-map-card id=$pid2 dur=$dur")
-        $mapped = $true
-      }
-      if (-not $mapped) {
-        $pool = @($cands | Where-Object { $_.First -and ($now - $_.First).TotalSeconds -le 12 })
-        if ($pool.Count -eq 0) { $pool = $cands }
-        # 标题变化时，当前视频的媒体请求通常就在变化前 0~2 秒开始；
-        # 不要选“下载字节最多”的，因为下一条预加载往往反而更大。
-        $target = $now.AddSeconds(-1)
-        $diag = @($pool | ForEach-Object {
-            $id8 = ([string]$_.M).Substring(0, [Math]::Min(8, ([string]$_.M).Length))
-            "$id8@$([int](($_.First - $target).TotalSeconds))s/$([int]($_.MaxEnd / 1MB))MB"
-          }) -join ','
-        Write-HudLog ("player-pool target=$($target.ToString('HH:mm:ss')) $diag")
-        $pick = @($pool | Sort-Object -Property `
-          @{ Expression = { [Math]::Abs(($_.First - $target).TotalSeconds) }; Ascending = $true }, `
-          @{ Expression = { $_.MaxEnd }; Descending = $true } | Select-Object -First 1)
-        if ($pick.Count -gt 0) {
-          $pid2 = [string]$pick[0].M
-          $script:currentMediaId = $pid2
-          $msize = Get-MediaSize $pick[0].Url
-          $mstatus = if ($msize -gt 0) { 'available' } else { 'played' }
-          Update-LibraryEntry @{
-            id = $pid2; title = $cap; duration = $dur; url = $pick[0].Url
-            cover = (Save-PlayerCover $playerInfo $pid2)
-            size = $msize; status = $mstatus; source = 'player'
-          }
-          Write-HudLog ("player-map id=$pid2 dur=$dur title=$($cap.Substring(0, [Math]::Min(30, $cap.Length)))")
-          $mapped = $true
-        }
-      }
-      if ($mapped) { $script:lastPlayerKey = $key }
+    if ($key -ne $script:lastPlayerKey) {
+      $cover = $null
+      try {
+        $snap = Join-Path $PSScriptRoot 'work\covers\_current_player.png'
+        if (Test-Path -LiteralPath $snap) { Remove-Item -LiteralPath $snap -Force }
+        $cover = Save-PlayerCover $playerInfo '_current'
+      } catch { }
+      try {
+        [pscustomobject]@{
+          title = $cap; duration = $dur; seconds = [int]$playerInfo.Seconds
+          cover = $cover; updated = (Get-Date).ToString('o')
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'work\player.json') -Encoding utf8
+      } catch { }
+      $script:lastPlayerKey = $key
     }
   }
 
-  $currentId = [string]$script:currentMediaId
-  if (-not $currentId) {
-    $current = @($cands | Where-Object { $_.HasM } | Sort-Object -Property First | Select-Object -First 1)
-    $currentId = if ($current.Count -gt 0) { [string]$current[0].M } else { [string]$cands[0].M }
-  }
-
+  $cands = @(Get-MediaCandidates 20)
+  if ($cands.Count -eq 0) { return }
   foreach ($c in $cands) {
     if (-not $c.First) { continue }
     if (($now - $c.First).TotalMinutes -gt 15) { continue }
     $id = [string]$c.M
     if (-not $id) { continue }
-    $isCurrent = ($id -eq $currentId)
     if ($script:Library.ContainsKey($id)) {
+      # 已有条目只补 URL/大小；title/cover 必须由这张卡或手动绑定提供
       $old = $script:Library[$id]
-      if ($playerInfo -and $isCurrent -and (
-          [string]$old.title -ne [string]$playerInfo.Description -or
-          [string]$old.duration -ne [string]$playerInfo.Duration -or -not $old.cover)) {
-        Update-LibraryEntry @{
-          id = $id; title = $playerInfo.Description; duration = $playerInfo.Duration
-          url = $c.Url; cover = (Save-PlayerCover $playerInfo $id)
-        }
-        Write-HudLog ("library-current id=$id")
+      if (-not $old.url -or -not $old.size) {
+        $size = Get-MediaSize $c.Url
+        Update-LibraryEntry @{ id = $id; url = $c.Url; size = $size }
       }
       continue
     }
     if ($script:autoLibraryAt.ContainsKey($id) -and ($now - $script:autoLibraryAt[$id]).TotalSeconds -lt 10) { continue }
     $script:autoLibraryAt[$id] = $now
-
-    $title = ''; $dur = ''; $cover = $null
-    if ($playerInfo) {
-      $cover = Save-PlayerCover $playerInfo $id
-      if ($isCurrent) {
-        $title = $playerInfo.Description
-        $dur = $playerInfo.Duration
-      } else {
-        $title = '（预加载 · ' + $id.Substring(0, [Math]::Min(8, $id.Length)) + '）'
-        $dur = '—'
-      }
-    }
-    if (-not $title) {
-      $title = '（播放过 · ' + $id.Substring(0, [Math]::Min(8, $id.Length)) + '）'
-    }
     $size = Get-MediaSize $c.Url
     $status = if ($size -gt 0) { 'available' } else { 'played' }
     Update-LibraryEntry @{
-      id = $id; title = $title; duration = $dur; url = $c.Url; cover = $cover
-      size = $size; width = 0; height = 0; status = $status; source = 'player'
+      id = $id; url = $c.Url; size = $size; width = 0; height = 0
+      status = $status; source = 'player'; title = ''; duration = ''; cover = ''
     }
-    Write-HudLog ("library-auto id=$id card=$([bool]$card) player=$([bool]$playerInfo) size=$size")
+    Write-HudLog ("library-auto id=$id size=$size (metadata pending)")
   }
 }
 
