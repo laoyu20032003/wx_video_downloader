@@ -73,6 +73,59 @@ public class WxVideoRow : INotifyPropertyChanged {
   if (-not ('WxVideoRow' -as [type])) { throw 'WxVideoRow type load failed' }
 }
 
+if (-not ('WxShellThumb' -as [type])) {
+  try {
+  $thumbRefs = @([System.Drawing.Bitmap].Assembly.Location)
+  $gdiPlus = Join-Path (Split-Path ([System.Drawing.Image].Assembly.Location)) 'System.Private.Windows.GdiPlus.dll'
+  if (Test-Path -LiteralPath $gdiPlus) { $thumbRefs += $gdiPlus }
+  $winCore = Join-Path (Split-Path ([System.Drawing.Image].Assembly.Location)) 'System.Private.Windows.Core.dll'
+  if (Test-Path -LiteralPath $winCore) { $thumbRefs += $winCore }
+  Add-Type -ReferencedAssemblies $thumbRefs -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+public static class WxShellThumb {
+  [StructLayout(LayoutKind.Sequential)]
+  struct SIZE { public int cx; public int cy; }
+  [Flags]
+  enum SIIGBF : uint {
+    RESIZETOFIT = 0, BIGGERSIZEOK = 1, MEMORYONLY = 2, ICONONLY = 4,
+    THUMBNAILONLY = 8, INCACHEONLY = 16, CROPTOSQUARE = 32,
+    WIDETHUMBNAILS = 64, ICONBACKGROUND = 128, SCALEUP = 256
+  }
+  [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IShellItemImageFactory {
+    [PreserveSig] int GetImage(SIZE size, SIIGBF flags, out IntPtr phbm);
+  }
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+  static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, ref Guid riid,
+    [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory factory);
+  [DllImport("gdi32.dll")]
+  static extern bool DeleteObject(IntPtr hObject);
+
+  public static bool Save(string file, string outPath, int cx, int cy) {
+    IntPtr h = IntPtr.Zero;
+    try {
+      Guid iid = typeof(IShellItemImageFactory).GUID;
+      IShellItemImageFactory f;
+      SHCreateItemFromParsingName(file, IntPtr.Zero, ref iid, out f);
+      int hr = f.GetImage(new SIZE { cx = cx, cy = cy }, SIIGBF.THUMBNAILONLY | SIIGBF.BIGGERSIZEOK, out h);
+      if (hr < 0 || h == IntPtr.Zero) { return false; }
+      using (var bmp = Image.FromHbitmap(h)) {
+        bmp.Save(outPath, ImageFormat.Jpeg);
+      }
+      return true;
+    } catch { return false; }
+    finally { if (h != IntPtr.Zero) { DeleteObject(h); } }
+  }
+}
+'@ -ErrorAction Stop
+  } catch {
+    try { Set-Content -LiteralPath (Join-Path $Work 'shellthumb.err') -Value $_.Exception.Message -Encoding utf8 } catch { }
+  }
+}
+
 function Format-Size([long]$bytes) {
   if ($bytes -le 0) { return '—' }
   if ($bytes -ge 1GB) { return ('{0:N2} GB' -f ($bytes / 1GB)) }
@@ -102,8 +155,30 @@ function Get-VideoCover([string]$file, [string]$id) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $safe = ($id -replace '[^0-9A-Za-z_-]', '')
     $path = Join-Path $dir ($safe + '.jpg')
+
+    # 1) 优先用文件内嵌的封面图（attached_pic / covr）
+    try {
+      $probe = & ffprobe -v error -select_streams v -show_entries stream=index:stream_disposition=attached_pic -of json $file 2>$null | Out-String | ConvertFrom-Json
+      $attached = @($probe.streams | Where-Object { $_.disposition.attached_pic -eq 1 } | Select-Object -First 1)
+      if ($attached.Count -gt 0) {
+        & ffmpeg -y -v error -i $file -map ("0:" + [string]$attached[0].index) -frames:v 1 -vf 'scale=320:-2' $path 2>$null
+        if (Test-Path -LiteralPath $path) { Write-GuiLog "cover-embedded id=$id"; return $path }
+      }
+    } catch { }
+
+    # 2) 用 Windows 资源管理器同一套缩略图，避免和用户看到的预览不一致
+    if ('WxShellThumb' -as [type]) {
+      try {
+        if ([WxShellThumb]::Save($file, $path, 320, 320) -and (Test-Path -LiteralPath $path)) {
+          Write-GuiLog "cover-shell id=$id"
+          return $path
+        }
+      } catch { }
+    }
+
+    # 3) 最后退回首帧
     & ffmpeg -y -v error -ss 0.2 -i $file -frames:v 1 -vf 'scale=320:-2' $path 2>$null
-    if (Test-Path -LiteralPath $path) { return $path }
+    if (Test-Path -LiteralPath $path) { Write-GuiLog "cover-frame id=$id"; return $path }
   } catch { }
   return $null
 }
@@ -958,6 +1033,7 @@ Load-CacheEpoch
 Load-Pending
 Load-Rows
 Write-GuiLog "gui-start library=$LibraryFile"
+if ('WxShellThumb' -as [type]) { Write-GuiLog 'shell-thumb-ready' } else { Write-GuiLog 'shell-thumb-unavailable' }
 Start-Listener
 Update-Count
 
