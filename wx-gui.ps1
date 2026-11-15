@@ -243,6 +243,7 @@ $white = [System.Windows.Media.Brushes]::White
 $rows = New-Object System.Collections.ObjectModel.ObservableCollection[object]
 $script:Jobs = @{}
 $script:AutoAttempted = @{}
+$script:RetryCounts = @{}
 $script:CoverQueue = New-Object System.Collections.Queue
 $script:CoverQueued = @{}
 $script:ListenerProc = $null
@@ -993,6 +994,7 @@ function Clear-Cache {
   $rows.Clear()
   $script:PendingIds = @{}
   $script:AutoAttempted = @{}
+  $script:RetryCounts = @{}
   $script:LibraryStamp = [DateTime]::MinValue
   $script:UiLogLines.Clear()
   $detailsBox.Text = ''
@@ -1097,7 +1099,19 @@ function Check-Pending {
     if ($e.updated) {
       try { $updated = [DateTime]::Parse([string]$e.updated, [Globalization.CultureInfo]::InvariantCulture) } catch { }
     }
-    if ($updated -le $row.PendingAt) { continue }
+    if ($updated -le $row.PendingAt) {
+      # HUD 没有刷新 URL 时，给同一条地址一次自动重试机会：
+      # 第一次失败常是明文头还没进内存，等 12 秒再试一次通常就能成功。
+      $retried = if ($script:RetryCounts.ContainsKey($row.Id)) { [int]$script:RetryCounts[$row.Id] } else { 0 }
+      if ($row.Url -and $retried -lt 1 -and ((Get-Date) - $row.PendingAt).TotalSeconds -ge 12) {
+        $script:RetryCounts[$row.Id] = $retried + 1
+        Set-RowPending $row $false
+        Write-GuiLog ("download-retry id=$($row.Id) attempt=1")
+        Invoke-RowAction $row -Auto:($row.Source -eq 'player')
+      }
+      continue
+    }
+    $script:RetryCounts.Remove($row.Id)
     $row.Url = [string]$e.url
     $row.StatusText = '下载中…'
     $row.StatusBrush = $blue
@@ -1163,6 +1177,7 @@ $timer.Add_Tick({
       Save-LibraryPatch $job.Row
       Save-IndexPatch $job.Row
       Set-RowPending $job.Row $false
+      $script:RetryCounts.Remove($job.Row.Id)
       Write-GuiLog ("download-done id=$($job.Row.Id) file=$saved")
       Update-Count
     } else {

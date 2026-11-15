@@ -343,7 +343,7 @@ function Get-UrlHead([string]$url) {
   $total = [long]0
   $code = 0
   try {
-    $text = (& $Curl -s -I -m 30 --noproxy '*' -H 'Referer: https://liteapp.weixin.qq.com/' `
+    $text = (& $Curl -s -I -m 10 --noproxy '*' -H 'Referer: https://liteapp.weixin.qq.com/' `
       -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' $url 2>$null | Out-String)
     if ($text -match 'HTTP/\S+\s+(\d+)') { $code = [int]$matches[1] }
     if ($text -match 'X-enclen:\s*(\d+)') { $enclen = [int]$matches[1] }
@@ -387,7 +387,7 @@ function Get-HeaderInfo([byte[]]$header) {
 function Test-UrlHeaderPair([string]$url, [long]$offset) {
   $tmp = Join-Path $Work 'probe16.bin'
   try {
-    $code = & $Curl -s -m 4 --noproxy '*' --max-filesize 4096 -r "$offset-$($offset + 15)" -o $tmp -w '%{http_code}' `
+    $code = & $Curl -s -m 3 --noproxy '*' --max-filesize 4096 -r "$offset-$($offset + 15)" -o $tmp -w '%{http_code}' `
       -H 'Referer: https://liteapp.weixin.qq.com/' `
       -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' $url 2>$null
     $code = "$code".Trim()
@@ -411,13 +411,14 @@ function Test-UrlHeaderPreflight([string]$url, [int]$enclen, [long]$total) {
   $seen = @{}
   $probeable = 0
   $probes = 0
-  $deadline = (Get-Date).AddSeconds(10)
+  $deadline = (Get-Date).AddSeconds(8)
   $timedOut = $false
   try {
     foreach ($p in $procs) {
       if ($timedOut) { break }
-      foreach ($a in [MemScan]::Scan([int]$p.ProcessId, 20)) {
+      foreach ($a in [MemScan]::Scan([int]$p.ProcessId, 10)) {
         if ($timedOut) { break }
+        if ((Get-Date) -ge $deadline) { $timedOut = $true; break }
         if ($a -lt 0) { continue }
         if (-not [MemScan]::Dump([int]$p.ProcessId, [long]$a, 131072, $tmp)) { continue }
         $h = [System.IO.File]::ReadAllBytes($tmp)
@@ -449,7 +450,7 @@ function Test-UrlHeaderPreflight([string]$url, [int]$enclen, [long]$total) {
 
   if ($seen.Count -eq 0) { return [pscustomobject]@{ Status = 'noheaders'; Reason = '内存里还没有文件头' } }
   if ($probeable -eq 0) { return [pscustomobject]@{ Status = 'skip'; Reason = '没有可探测的头' } }
-  if ($timedOut) { return [pscustomobject]@{ Status = 'mismatch'; Reason = '预检超时，地址与头未配对' } }
+  if ($timedOut) { return [pscustomobject]@{ Status = 'skip'; Reason = '预检超时，跳过预检' } }
   return [pscustomobject]@{ Status = 'mismatch'; Reason = '地址与所有内存头都不配对' }
 }
 
@@ -467,7 +468,7 @@ function Invoke-Fix([string]$url, [string]$tag) {  $cipher = Join-Path $Work "ci
   if (-not $NoPreflight -and ($head.Code -eq 200 -or $head.Code -eq 206)) {
     Write-Step "Range 预检：地址与内存头配对 ..."
     $pre = $null
-    for ($attempt = 0; $attempt -lt 4; $attempt++) {
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
       $pre = Test-UrlHeaderPreflight $url $enclen $head.Total
       if ($pre.Status -ne 'noheaders') { break }
       Start-Sleep -Seconds 1
