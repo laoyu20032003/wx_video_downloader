@@ -27,29 +27,47 @@ Add-Type -AssemblyName System.Drawing
 if (-not ('WxVideoRow' -as [type])) {
   $rowTypeSource = @'
 using System;
+using System.ComponentModel;
 using System.Windows.Media;
-public class WxVideoRow {
-  public string Id { get; set; }
-  public string Title { get; set; }
-  public string Duration { get; set; }
-  public string SizeText { get; set; }
-  public string Resolution { get; set; }
-  public string StatusText { get; set; }
-  public Brush StatusBrush { get; set; }
-  public string ActionText { get; set; }
-  public string File { get; set; }
-  public string Url { get; set; }
-  public ImageSource CoverImage { get; set; }
-  public string Updated { get; set; }
-  public bool Pending { get; set; }
-  public DateTime PendingAt { get; set; }
+public class WxVideoRow : INotifyPropertyChanged {
+  private string _id, _shortId, _title, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated;
+  private Brush _statusBrush;
+  private ImageSource _coverImage;
+  private bool _pending, _canAct;
+  private DateTime _pendingAt;
+
+  public string Id { get { return _id; } set { if (_id != value) { _id = value; Raise("Id"); } } }
+  public string ShortId { get { return _shortId; } set { if (_shortId != value) { _shortId = value; Raise("ShortId"); } } }
+  public string Title { get { return _title; } set { if (_title != value) { _title = value; Raise("Title"); } } }
+  public string Duration { get { return _duration; } set { if (_duration != value) { _duration = value; Raise("Duration"); } } }
+  public string SizeText { get { return _sizeText; } set { if (_sizeText != value) { _sizeText = value; Raise("SizeText"); } } }
+  public string Resolution { get { return _resolution; } set { if (_resolution != value) { _resolution = value; Raise("Resolution"); } } }
+  public string StatusText { get { return _statusText; } set { if (_statusText != value) { _statusText = value; Raise("StatusText"); } } }
+  public Brush StatusBrush { get { return _statusBrush; } set { if (_statusBrush != value) { _statusBrush = value; Raise("StatusBrush"); } } }
+  public string ActionText { get { return _actionText; } set { if (_actionText != value) { _actionText = value; Raise("ActionText"); } } }
+  public string File { get { return _file; } set { if (_file != value) { _file = value; Raise("File"); } } }
+  public string Url { get { return _url; } set { if (_url != value) { _url = value; Raise("Url"); } } }
+  public ImageSource CoverImage { get { return _coverImage; } set { if (_coverImage != value) { _coverImage = value; Raise("CoverImage"); } } }
+  public string Updated { get { return _updated; } set { if (_updated != value) { _updated = value; Raise("Updated"); } } }
+  public bool Pending { get { return _pending; } set { if (_pending != value) { _pending = value; Raise("Pending"); } } }
+  public DateTime PendingAt { get { return _pendingAt; } set { _pendingAt = value; Raise("PendingAt"); } }
+  public bool CanAct { get { return _canAct; } set { if (_canAct != value) { _canAct = value; Raise("CanAct"); } } }
+
+  public event PropertyChangedEventHandler PropertyChanged;
+  private void Raise(string name) {
+    var h = PropertyChanged;
+    if (h != null) { h(this, new PropertyChangedEventArgs(name)); }
+  }
 }
 '@
   Add-Type -ReferencedAssemblies @(
+    [System.ComponentModel.INotifyPropertyChanged].Assembly.Location,
     [System.Windows.Media.ImageSource].Assembly.Location,
     [System.Windows.Media.Brush].Assembly.Location,
+    [System.Windows.DependencyObject].Assembly.Location,
     [System.Windows.FrameworkElement].Assembly.Location
-  ) -TypeDefinition $rowTypeSource
+  ) -TypeDefinition $rowTypeSource -ErrorAction Stop
+  if (-not ('WxVideoRow' -as [type])) { throw 'WxVideoRow type load failed' }
 }
 
 function Format-Size([long]$bytes) {
@@ -59,13 +77,23 @@ function Format-Size([long]$bytes) {
   return ('{0:N0} KB' -f ($bytes / 1KB))
 }
 
+function Convert-DurationText([string]$s) {
+  if (-not $s) { return 0 }
+  $s = $s.Trim()
+  if ($s -match '^(\d{1,2}):(\d{2})$') { return ([int]$matches[1] * 60 + [int]$matches[2]) }
+  if ($s -match '^(\d{1,2}):(\d{2}):(\d{2})$') {
+    return ([int]$matches[1] * 3600 + [int]$matches[2] * 60 + [int]$matches[3])
+  }
+  return 0
+}
+
 function Get-VideoInfo([string]$file) {
   try {
     $json = & ffprobe -v error -select_streams v:0 -show_entries stream=width,height `
-      -show_entries format=size -of json $file 2>$null | Out-String
+      -show_entries format=size,duration -of json $file 2>$null | Out-String
     $j = $json | ConvertFrom-Json
     $s = @($j.streams)[0]
-    return [pscustomobject]@{ width = [int]$s.width; height = [int]$s.height; size = [long]$j.format.size }
+    return [pscustomobject]@{ width = [int]$s.width; height = [int]$s.height; size = [long]$j.format.size; duration = [double]$j.format.duration }
   } catch { return $null }
 }
 
@@ -114,12 +142,14 @@ $script:ProxyApplied = $false
 $script:HudPidFile = Join-Path $Work 'hud.pid'
 $script:ProxySnapshot = Join-Path $Work 'proxy_snapshot.json'
 $script:GuiLog = Join-Path $Work 'gui.log'
+$script:UiLogLines = New-Object System.Collections.Generic.List[string]
 $script:PendingFile = Join-Path $Work 'pending.json'
 $script:PendingIds = @{}
 $script:LibraryStamp = [DateTime]::MinValue
 
 function Write-GuiLog([string]$msg) {
   try { Add-Content -LiteralPath $script:GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -Encoding utf8 } catch { }
+  if (Get-Command Add-UiLog -ErrorAction SilentlyContinue) { Add-UiLog $msg }
 }
 
 function Load-Pending {
@@ -301,6 +331,7 @@ function New-Row($entry, [string]$fallbackTitle) {
 
   $row = New-Object WxVideoRow
   $row.Id = [string]$entry.id
+  $row.ShortId = $row.Id.Substring(0, [Math]::Min(8, $row.Id.Length))
   $row.Title = $title
   $row.Duration = if ($entry.duration) { [string]$entry.duration } else { '—' }
   $row.SizeText = Format-Size $size
@@ -308,6 +339,7 @@ function New-Row($entry, [string]$fallbackTitle) {
   $row.StatusText = $statusText
   $row.StatusBrush = $brush
   $row.ActionText = if ($exists) { '打开' } else { '下载' }
+  $row.CanAct = $true
   $row.File = if ($exists) { $file } else { '' }
   $row.Url = [string]$entry.url
   $row.CoverImage = $cover
@@ -337,7 +369,9 @@ function Load-Rows {
         $seenIds[[string]$e.id] = $true
         if ($row.File) { $seenFiles[$row.File.ToLower()] = $true }
       }
-    } catch { }
+    } catch {
+      Write-GuiLog ("load-rows-error: " + $_.Exception.Message)
+    }
   }
 
   if (Test-Path -LiteralPath $IndexFile) {
@@ -361,6 +395,17 @@ function Load-Rows {
       (Get-Item -LiteralPath $LibraryFile).LastWriteTimeUtc
     } else { [DateTime]::MinValue }
   } catch { }
+  Disambiguate-Titles
+}
+
+function Disambiguate-Titles {
+  $groups = @($rows | Group-Object -Property Title | Where-Object { $_.Count -gt 1 })
+  foreach ($g in $groups) {
+    foreach ($r in $g.Group) {
+      $suffix = ' · ' + $r.Id.Substring(0, [Math]::Min(8, $r.Id.Length))
+      if (-not $r.Title.EndsWith($suffix)) { $r.Title = $r.Title + $suffix }
+    }
+  }
 }
 
 function Sync-Library {
@@ -398,8 +443,10 @@ function Sync-Library {
       $rows.Insert(0, $row)
       $byId[$id] = $row
       $changed = $true
+      Write-GuiLog ("library-new id=$id title=$($row.Title)")
     }
   }
+  Disambiguate-Titles
   if ($changed) { Update-Count }
 }
 
@@ -455,6 +502,7 @@ function Invoke-RowAction($row) {
   }
   if (-not $row.Url) {
     Set-RowPending $row $true
+    $row.CanAct = $true
     [System.Windows.MessageBox]::Show("这条还没有可用的下载地址，已加入待重播。`n`n请回到作者主页悬停这张卡片 2～3 秒；HUD 捕捉到新地址后，视频库会自动继续下载。", '视频号视频库') | Out-Null
     return
   }
@@ -463,17 +511,23 @@ function Invoke-RowAction($row) {
   $out = Join-Path $Work ("gui_save_$tag.out")
   $err = Join-Path $Work ("gui_save_$tag.err")
   Remove-Item -LiteralPath $out, $err -ErrorAction SilentlyContinue
+  $row.StatusText = '匹配中…'
+  $row.StatusBrush = $blue
+  $row.ActionText = '…'
+  $row.CanAct = $false
+  Write-GuiLog ("download-start id=$($row.Id) title=$($row.Title)")
   try {
     $proc = Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolScript,
       '-SaveUrl', $row.Url, '-SaveTag', $tag, '-OutDir', $OutDir
     ) -RedirectStandardOutput $out -RedirectStandardError $err
     Set-RowPending $row $false
-    $row.StatusText = '下载中…'
-    $row.StatusBrush = $blue
-    $row.ActionText = '下载中'
-    $script:Jobs[$proc.Id] = [pscustomobject]@{ Row = $row; Out = $out; Err = $err; Proc = $proc }
+    $script:Jobs[$proc.Id] = [pscustomobject]@{ Row = $row; Out = $out; Err = $err; Proc = $proc; Phase = '匹配中…' }
   } catch {
+    $row.CanAct = $true
+    $row.StatusText = '下载失败'
+    $row.StatusBrush = $red
+    $row.ActionText = '重试'
     [System.Windows.MessageBox]::Show("启动下载失败：$($_.Exception.Message)", '视频号视频库') | Out-Null
   }
 }
@@ -493,9 +547,11 @@ $rd0 = New-Object System.Windows.Controls.RowDefinition; $rd0.Height = [System.W
 $rd1 = New-Object System.Windows.Controls.RowDefinition; $rd1.Height = [System.Windows.GridLength]::Auto
 $rd2 = New-Object System.Windows.Controls.RowDefinition
 $rd2.Height = New-Object System.Windows.GridLength(1, [System.Windows.GridUnitType]::Star)
+$rd3 = New-Object System.Windows.Controls.RowDefinition; $rd3.Height = [System.Windows.GridLength]::Auto
 [void]$root.RowDefinitions.Add($rd0)
 [void]$root.RowDefinitions.Add($rd1)
 [void]$root.RowDefinitions.Add($rd2)
+[void]$root.RowDefinitions.Add($rd3)
 
 $top = New-Object System.Windows.Controls.StackPanel
 $top.Orientation = 'Horizontal'
@@ -541,7 +597,8 @@ $headerXaml = @"
 <Grid $ns Background="#252526" Height="34">
   <Grid.ColumnDefinitions>
     <ColumnDefinition Width="118"/>
-    <ColumnDefinition Width="470"/>
+    <ColumnDefinition Width="90"/>
+    <ColumnDefinition Width="380"/>
     <ColumnDefinition Width="70"/>
     <ColumnDefinition Width="90"/>
     <ColumnDefinition Width="110"/>
@@ -549,12 +606,13 @@ $headerXaml = @"
     <ColumnDefinition Width="100"/>
   </Grid.ColumnDefinitions>
   <TextBlock Grid.Column="0" Text="封面" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
-  <TextBlock Grid.Column="1" Text="标题" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
-  <TextBlock Grid.Column="2" Text="时长" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-  <TextBlock Grid.Column="3" Text="大小" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-  <TextBlock Grid.Column="4" Text="分辨率" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-  <TextBlock Grid.Column="5" Text="状态" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-  <TextBlock Grid.Column="6" Text="操作" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+  <TextBlock Grid.Column="1" Text="ID" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+  <TextBlock Grid.Column="2" Text="标题" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
+  <TextBlock Grid.Column="3" Text="时长" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+  <TextBlock Grid.Column="4" Text="大小" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+  <TextBlock Grid.Column="5" Text="分辨率" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+  <TextBlock Grid.Column="6" Text="状态" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+  <TextBlock Grid.Column="7" Text="操作" Foreground="#C8C8C8" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
 </Grid>
 "@
 $header = [System.Windows.Markup.XamlReader]::Parse($headerXaml)
@@ -564,7 +622,8 @@ $rowXaml = @"
   <Grid Height="66" Margin="0,1">
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="118"/>
-      <ColumnDefinition Width="470"/>
+      <ColumnDefinition Width="90"/>
+      <ColumnDefinition Width="380"/>
       <ColumnDefinition Width="70"/>
       <ColumnDefinition Width="90"/>
       <ColumnDefinition Width="110"/>
@@ -574,12 +633,24 @@ $rowXaml = @"
     <Border Grid.Column="0" Width="100" Height="58" Background="#37373A" CornerRadius="4" ClipToBounds="True" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="8,0,0,0">
       <Image Source="{Binding CoverImage}" Width="96" Height="54" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
-    <TextBlock Grid.Column="1" Text="{Binding Title}" Foreground="#E8E8E8" VerticalAlignment="Center" Margin="8,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
-    <TextBlock Grid.Column="2" Text="{Binding Duration}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
-    <TextBlock Grid.Column="3" Text="{Binding SizeText}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
-    <TextBlock Grid.Column="4" Text="{Binding Resolution}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
-    <TextBlock Grid.Column="5" Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" VerticalAlignment="Center"/>
-    <Button Grid.Column="6" Content="{Binding ActionText}" Tag="{Binding}" Padding="10,3" Margin="6,0" Background="#3A3A3D" Foreground="White" BorderBrush="#555555" Height="28" VerticalAlignment="Center" HorizontalAlignment="Left"/>
+    <TextBlock Grid.Column="1" Text="{Binding ShortId}" Foreground="#8A8A8A" FontFamily="Consolas" FontSize="11" VerticalAlignment="Center" ToolTip="{Binding Id}"/>
+    <TextBlock Grid.Column="2" Text="{Binding Title}" Foreground="#E8E8E8" VerticalAlignment="Center" Margin="8,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
+    <TextBlock Grid.Column="3" Text="{Binding Duration}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
+    <TextBlock Grid.Column="4" Text="{Binding SizeText}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
+    <TextBlock Grid.Column="5" Text="{Binding Resolution}" Foreground="#D0D0D0" VerticalAlignment="Center"/>
+    <TextBlock Grid.Column="6" Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" VerticalAlignment="Center"/>
+    <Button Grid.Column="7" Content="{Binding ActionText}" Tag="{Binding}" Padding="10,3" Margin="6,0" Background="#3A3A3D" Foreground="White" BorderBrush="#555555" Height="28" VerticalAlignment="Center" HorizontalAlignment="Left" IsEnabled="{Binding CanAct}">
+      <Button.Style>
+        <Style TargetType="Button">
+          <Setter Property="Visibility" Value="Visible"/>
+          <Style.Triggers>
+            <DataTrigger Binding="{Binding CanAct}" Value="False">
+              <Setter Property="Visibility" Value="Collapsed"/>
+            </DataTrigger>
+          </Style.Triggers>
+        </Style>
+      </Button.Style>
+    </Button>
   </Grid>
 </DataTemplate>
 "@
@@ -616,10 +687,84 @@ $list.AddHandler([System.Windows.Controls.Primitives.ButtonBase]::ClickEvent, [S
 [void]$root.Children.Add($header)
 [System.Windows.Controls.Grid]::SetRow($list, 2)
 [void]$root.Children.Add($list)
+
+$detailsBox = New-Object System.Windows.Controls.TextBox
+$detailsBox.IsReadOnly = $true
+$detailsBox.AcceptsReturn = $true
+$detailsBox.TextWrapping = 'NoWrap'
+$detailsBox.FontFamily = 'Consolas'
+$detailsBox.FontSize = 12
+$detailsBox.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(255, 24, 24, 26))
+$detailsBox.Foreground = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(255, 210, 210, 210))
+$detailsBox.BorderThickness = New-Object System.Windows.Thickness(0)
+$detailsBox.Padding = New-Object System.Windows.Thickness(8)
+$detailsBox.VerticalScrollBarVisibility = 'Auto'
+$detailsBox.HorizontalScrollBarVisibility = 'Auto'
+
+$logBox = New-Object System.Windows.Controls.TextBox
+$logBox.IsReadOnly = $true
+$logBox.AcceptsReturn = $true
+$logBox.TextWrapping = 'NoWrap'
+$logBox.FontFamily = 'Consolas'
+$logBox.FontSize = 11
+$logBox.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(255, 24, 24, 26))
+$logBox.Foreground = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(255, 180, 200, 180))
+$logBox.BorderThickness = New-Object System.Windows.Thickness(0)
+$logBox.Padding = New-Object System.Windows.Thickness(8)
+$logBox.VerticalScrollBarVisibility = 'Auto'
+$logBox.HorizontalScrollBarVisibility = 'Auto'
+
+$tabs = New-Object System.Windows.Controls.TabControl
+$tabs.Height = 158
+$tabs.Margin = New-Object System.Windows.Thickness(12, 0, 12, 8)
+$tabs.Background = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.Color]::FromArgb(255, 37, 37, 38))
+$tabs.Foreground = $white
+$tabDetails = New-Object System.Windows.Controls.TabItem
+$tabDetails.Header = '详情 / 可复制'
+$tabDetails.Content = $detailsBox
+$tabLog = New-Object System.Windows.Controls.TabItem
+$tabLog.Header = '日志'
+$tabLog.Content = $logBox
+[void]$tabs.Items.Add($tabDetails)
+[void]$tabs.Items.Add($tabLog)
+[System.Windows.Controls.Grid]::SetRow($tabs, 3)
+[void]$root.Children.Add($tabs)
+
+function Add-UiLog([string]$msg) {
+  $line = "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg
+  [void]$script:UiLogLines.Add($line)
+  while ($script:UiLogLines.Count -gt 500) { $script:UiLogLines.RemoveAt(0) }
+  if ($logBox) {
+    $logBox.Text = ($script:UiLogLines -join "`r`n")
+    $logBox.ScrollToEnd()
+  }
+}
+
+function Show-RowDetails($row) {
+  if (-not $row) { $detailsBox.Text = ''; return }
+  $detailsBox.Text = @(
+    "ID:          $($row.Id)"
+    "标题:        $($row.Title)"
+    "时长:        $($row.Duration)"
+    "大小:        $($row.SizeText)"
+    "分辨率:      $($row.Resolution)"
+    "状态:        $($row.StatusText)"
+    "待重播:      $($row.Pending)"
+    "文件:        $(if ($row.File) { $row.File } else { '—' })"
+    "URL:         $(if ($row.Url) { $row.Url } else { '—' })"
+    "封面:        列表缩略图（work\\covers）"
+    "更新时间:    $($row.Updated)"
+  ) -join "`r`n"
+}
+
+$list.Add_SelectionChanged({
+  Show-RowDetails $list.SelectedItem
+})
+
 $window.Content = $root
 
 function Update-Count {
-  $done = @($rows | Where-Object { $_.StatusText -eq '已下载' }).Count
+  $done = @($rows | Where-Object { $_.StatusText -in @('已下载', '下载完成') }).Count
   $countBlock.Text = "共 $($rows.Count) 条 · 已下载 $done"
   switch ($script:ListenerState) {
     'starting' { $listenBlock.Text = '监听：启动中…'; $listenBlock.Foreground = $amber }
@@ -634,6 +779,7 @@ function Update-Count {
 }
 Load-Pending
 Load-Rows
+Write-GuiLog "gui-start library=$LibraryFile"
 Start-Listener
 Update-Count
 
@@ -684,26 +830,57 @@ $timer.Add_Tick({
   Check-Pending
   foreach ($id in @($script:Jobs.Keys)) {
     $job = $script:Jobs[$id]
-    if (-not $job.Proc.HasExited) { continue }
-    $text = if (Test-Path -LiteralPath $job.Out) { Get-Content -LiteralPath $job.Out -Raw } else { '' }
+    $text = if (Test-Path -LiteralPath $job.Out) { Get-Content -LiteralPath $job.Out -Tail 40 -ErrorAction SilentlyContinue | Out-String } else { '' }
+
+    if (-not $job.Proc.HasExited) {
+      $phase = '匹配中…'
+      if ($text -match '全片校验|命中') { $phase = '校验中…' }
+      elseif ($text -match '下载密文') { $phase = '下载中…' }
+      elseif ($text -match '尝试缓存|扫描内存') { $phase = '匹配中…' }
+      $job.Row.CanAct = $false
+      if ($job.Row.StatusText -ne $phase) {
+        $job.Row.StatusText = $phase
+        $job.Row.StatusBrush = $blue
+        $job.Row.ActionText = '…'
+        $job.Phase = $phase
+        Write-GuiLog "download-phase id=$($job.Row.Id) $phase"
+      }
+      continue
+    }
+
+    $job.Row.CanAct = $true
     if ($text -match 'SAVED=(.+)') {
       $saved = $matches[1].Trim().TrimEnd([char]13, [char]10)
-      $job.Row.File = $saved
-      $job.Row.StatusText = '已下载'
-      $job.Row.StatusBrush = $green
-      $job.Row.ActionText = '打开'
-      $job.Row.SizeText = Format-Size ([long](Get-Item -LiteralPath $saved).Length)
       $info = Get-VideoInfo $saved
-      if ($info -and $info.width -gt 0) { $job.Row.Resolution = "$($info.width)x$($info.height)" }
-      Save-LibraryPatch $job.Row
-      Save-IndexPatch $job.Row
-      Set-RowPending $job.Row $false
-      Update-Count
+      $expected = Convert-DurationText $job.Row.Duration
+      $actual = if ($info) { [int][Math]::Round($info.duration) } else { 0 }
+      if ($expected -gt 0 -and $actual -gt 0 -and [Math]::Abs($expected - $actual) -gt 2) {
+        # 下到了别的视频：不写索引/库，保留文件供排查
+        Set-RowPending $job.Row $true
+        $job.Row.StatusText = '匹配错误'
+        $job.Row.StatusBrush = $red
+        $job.Row.ActionText = '重试'
+        $job.Row.File = ''
+        Write-GuiLog ("download-mismatch id=$($job.Row.Id) expected=${expected}s actual=${actual}s file=$saved")
+      } else {
+        $job.Row.File = $saved
+        $job.Row.StatusText = '下载完成'
+        $job.Row.StatusBrush = $green
+        $job.Row.ActionText = '打开'
+        $job.Row.SizeText = Format-Size ([long](Get-Item -LiteralPath $saved).Length)
+        if ($info -and $info.width -gt 0) { $job.Row.Resolution = "$($info.width)x$($info.height)" }
+        Save-LibraryPatch $job.Row
+        Save-IndexPatch $job.Row
+        Set-RowPending $job.Row $false
+        Write-GuiLog ("download-done id=$($job.Row.Id) file=$saved")
+        Update-Count
+      }
     } else {
       Set-RowPending $job.Row $true
       $job.Row.StatusText = '待重播'
       $job.Row.StatusBrush = $amber
       $job.Row.ActionText = '下载'
+      Write-GuiLog ("download-fail id=$($job.Row.Id)")
       [System.Windows.MessageBox]::Show("下载失败：签名地址可能已过期，或内存里没有明文头。`n`n已加入待重播。请在微信里重新播放这条视频（悬停卡片 2～3 秒），HUD 捕捉到新地址后视频库会自动继续下载。", '视频号视频库') | Out-Null
     }
     $script:Jobs.Remove($id)

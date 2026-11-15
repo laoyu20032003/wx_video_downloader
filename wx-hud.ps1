@@ -257,6 +257,7 @@ function Read-MediaFlows {
     [void]$script:recentMedia.Add([pscustomobject]@{
         M = $id; Url = $url; Time = $now; Status = $parts[1]
         RangeStart = $rangeStart; RangeEnd = $rangeEnd
+        HasM = [bool]($url -match '(?:\?|&)m=[0-9A-Za-z]{8,}')
       })
   }
   $cut = $now.AddSeconds(-30)
@@ -280,12 +281,13 @@ function Get-MediaCandidates([int]$max = 3) {
       $first = if ($script:mediaFirst.ContainsKey($it.M)) { $script:mediaFirst[$it.M] } else { $it.Time }
       $groups[$it.M] = [pscustomobject]@{
         M = $it.M; Url = $it.Url; First = $first; Last = $it.Time
-        MaxEnd = [long]0; Count = 0
+        MaxEnd = [long]0; Count = 0; HasM = [bool]$it.HasM
       }
     }
     $g = $groups[$it.M]
     $g.Last = $it.Time
     $g.Count++
+    if ($it.HasM) { $g.HasM = $true }
     if ($it.RangeEnd -gt $g.MaxEnd) { $g.MaxEnd = [long]$it.RangeEnd }
     if ($it.Url) { $g.Url = $it.Url }
   }
@@ -643,17 +645,19 @@ function Update-PlayedLibrary($card, $playerInfo) {
   if ($card) { return }
   $cands = @(Get-MediaCandidates 20)
   if ($cands.Count -eq 0) { return }
+  $current = @($cands | Where-Object { $_.HasM } | Sort-Object -Property First | Select-Object -First 1)
+  $currentId = if ($current.Count -gt 0) { [string]$current[0].M } else { [string]$cands[0].M }
   $now = Get-Date
   foreach ($c in $cands) {
     if (-not $c.First) { continue }
     if (($now - $c.First).TotalMinutes -gt 15) { continue }
     $id = [string]$c.M
     if (-not $id) { continue }
-    $isFirst = ($id -eq [string]$cands[0].M)
+    $isFirst = ($id -eq $currentId)
     if ($script:Library.ContainsKey($id)) {
       # 预加载条目后来成了当前播放：把标题/时长/封面补正
       $old = $script:Library[$id]
-      if ($playerInfo -and $isFirst -and ($old.title -like '（预加载）*' -or $old.title -like '（播放过的视频）*')) {
+      if ($playerInfo -and $isFirst -and ($old.title -like '（预加载*' -or $old.title -like '（播放过*' -or -not $old.cover -or [string]$old.duration -ne [string]$playerInfo.Duration)) {
         Update-LibraryEntry @{
           id = $id; title = $playerInfo.Description; duration = $playerInfo.Duration
           url = $c.Url; cover = (Save-PlayerCover $playerInfo $id)
@@ -668,16 +672,18 @@ function Update-PlayedLibrary($card, $playerInfo) {
 
     $title = ''; $dur = ''; $cover = $null
     if ($playerInfo) {
-      $title = $playerInfo.Description
-      $dur = $playerInfo.Duration
       $cover = Save-PlayerCover $playerInfo $id
-      if (-not $isFirst) {
-        if (-not $title) { $title = '视频号视频' }
-        $title = '（预加载）' + $title
+      if ($isFirst) {
+        $title = $playerInfo.Description
+        $dur = $playerInfo.Duration
+      } else {
+        $title = '（预加载 · ' + $id.Substring(0, [Math]::Min(8, $id.Length)) + '）'
         $dur = '—'
       }
     }
-    if (-not $title) { $title = '（播放过的视频）' }
+    if (-not $title) {
+      $title = '（播放过 · ' + $id.Substring(0, [Math]::Min(8, $id.Length)) + '）'
+    }
     $size = Get-MediaSize $c.Url
     $status = if ($size -gt 0) { 'available' } else { 'played' }
     Update-LibraryEntry @{
