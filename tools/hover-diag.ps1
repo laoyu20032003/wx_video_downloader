@@ -37,6 +37,7 @@ $hud = @(Read-Log $HudLog 'hud')
 $gui = @(Read-Log $GuiLog 'gui')
 $attempts = New-Object System.Collections.ArrayList
 $cur = $null
+$currentMode = 'unknown'
 
 function Close-Attempt($a) {
   if (-not $a) { return }
@@ -48,6 +49,7 @@ function Close-Attempt($a) {
 
 foreach ($e in $hud) {
   $m = $e.Msg
+  if ($m -match '^mode=(\w+)') { $currentMode = $matches[1]; continue }
   if ($m -match '^hover-start key=(.*?) fallback=') {
     Close-Attempt $cur
     $cur = [pscustomobject]@{
@@ -55,7 +57,7 @@ foreach ($e in $hud) {
       BindTime = $null; Id = ''; Error = ''; Dwell = $false; Duration = 0
       Library = $false; DownloadStart = $null; FirstOutcome = ''
       EventualDone = $false; FirstFail = $false
-      Candidates = -1; CandidateList = ''
+      Candidates = -1; CandidateList = ''; Mode = $currentMode
     }
     continue
   }
@@ -136,12 +138,12 @@ foreach ($a in $attempts) {
     elseif (-not $a.Dwell) { $r = '未达到 1 秒停留' }
     elseif ($a.Candidates -eq 0) { $r = '有停留，0 个媒体候选' }
     else { $r = '有候选但未绑定' }
-    $unbound += [pscustomobject]@{ Time = $a.Start; Duration = $a.Duration; Reason = $r; Key = $a.Key }
+    $unbound += [pscustomobject]@{ Time = $a.Start; Duration = $a.Duration; Reason = $r; Key = $a.Key; Mode = $a.Mode }
   } elseif (-not $a.Library) {
-    $unbound += [pscustomobject]@{ Time = $a.Start; Duration = $a.Duration; Reason = '绑定成功但未入库'; Key = $a.Key }
+    $unbound += [pscustomobject]@{ Time = $a.Start; Duration = $a.Duration; Reason = '绑定成功但未入库'; Key = $a.Key; Mode = $a.Mode }
   }
 }
-$reasonRows = @($unbound | Group-Object Reason | Sort-Object Count -Descending |
+$reasonRows = @($unbound | Group-Object { "$($_.Reason) [mode=$($_.Mode)]" } | Sort-Object Count -Descending |
   ForEach-Object { [pscustomobject]@{ 原因 = $_.Name; 次数 = $_.Count } })
 
 # 2) 停留/点击延迟 vs 首次成功
@@ -225,14 +227,14 @@ else {
 [void]$lines.Add('')
 [void]$lines.Add('## 4. 明细')
 [void]$lines.Add('')
-[void]$lines.Add('| 开始 | 停留 | 候选数 | 绑定 ID | 入库 | 点击延迟 | 首次结果 | 最终成功 | 未入库原因 |')
-[void]$lines.Add('|---|---|---|---|---|---|---|---|---|')
+[void]$lines.Add('| 开始 | 模式 | 停留 | 候选数 | 绑定 ID | 入库 | 点击延迟 | 首次结果 | 最终成功 | 未入库原因 |')
+[void]$lines.Add('|---|---|---|---|---|---|---|---|---|---|')
 foreach ($a in $attempts) {
   $delay = if ($a.DownloadStart) { '{0:N1}s' -f ($a.DownloadStart - $a.Start).TotalSeconds } else { '' }
   $reason = ''
   if (-not $a.Bound) { $reason = if ($a.Error) { '异常' } elseif (-not $a.Dwell) { '未满1秒' } elseif ($a.Candidates -eq 0) { '无候选' } else { '有候选未绑定' } }
   elseif (-not $a.Library) { $reason = '绑定未入库' }
-  [void]$lines.Add("| $($a.Start.ToString('HH:mm:ss')) | $($a.Duration)s | $($a.Candidates) | $($a.Id) | $($a.Library) | $delay | $($a.FirstOutcome) | $($a.EventualDone) | $reason |")
+  [void]$lines.Add("| $($a.Start.ToString('HH:mm:ss')) | $($a.Mode) | $($a.Duration)s | $($a.Candidates) | $($a.Id) | $($a.Library) | $delay | $($a.FirstOutcome) | $($a.EventualDone) | $reason |")
 }
 [void]$lines.Add('')
 
