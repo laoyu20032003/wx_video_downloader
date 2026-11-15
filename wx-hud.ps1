@@ -19,7 +19,7 @@
 
   注意：
     - 必须 STA；wx-hud.cmd 已带 -Sta。
-    - 只按“时长”匹配已下载文件（视频号_*_<秒>s.mp4），同一时长多文件时取最新。
+    - 已下载状态只按媒体 ID/下载索引匹配，不再按时长猜测。
     - 这是第一步：先把“卡片识别 + 状态显示”跑通，后续再做逐卡徽标和 F8 保存。
 #>
 param(
@@ -150,25 +150,6 @@ function ConvertTo-Seconds([string]$d) {
     3 { return $parts[0] * 3600 + $parts[1] * 60 + $parts[2] }
     default { return 0 }
   }
-}
-
-$script:filesByDuration = @{}
-$script:lastIndexRefresh = [datetime]::MinValue
-
-function Refresh-Index {
-  $map = @{}
-  if (Test-Path -LiteralPath $OutDir) {
-    foreach ($f in Get-ChildItem -LiteralPath $OutDir -File -Filter '*.mp4' -ErrorAction SilentlyContinue) {
-      if ($f.Name -match '_(\d+)s\.mp4$') {
-        $sec = [int]$Matches[1]
-        if (-not $map.ContainsKey($sec)) { $map[$sec] = New-Object System.Collections.ArrayList }
-        [void]$map[$sec].Add($f)
-      }
-    }
-  }
-  $script:filesByDuration = $map
-  $script:lastIndexRefresh = Get-Date
-  Write-Verbose ("index: {0} durations" -f $map.Count)
 }
 
 $script:flowOffset = [long]0
@@ -394,23 +375,19 @@ function Get-CardKey($card) {
 }
 
 function Get-IndexedEntry($card, $media) {
-  $key = Get-CardKey $card
-  if ($script:index.ContainsKey($key)) {
-    $e = $script:index[$key]
-    if ($e.file -and (Test-Path -LiteralPath $e.file)) { return $e }
-    $script:index.Remove($key)
-  }
   if ($media) {
     foreach ($e in $script:index.Values) {
       if ($e.m -eq $media.M -and $e.file -and (Test-Path -LiteralPath $e.file)) { return $e }
     }
+    return $null
   }
-  # 文案可能被 UIA 截断/为空，索引键对不上时再按时长兜底
-  if ($card.Duration) {
-    foreach ($e in $script:index.Values) {
-      if ($e.duration -eq $card.Duration -and $e.file -and (Test-Path -LiteralPath $e.file)) { return $e }
-    }
+  $key = Get-CardKey $card
+  if ($key -and $script:index.ContainsKey($key)) {
+    $e = $script:index[$key]
+    if ($e.file -and (Test-Path -LiteralPath $e.file)) { return $e }
+    $script:index.Remove($key)
   }
+  # 没有绑定媒体时不再按时长/文案猜测“已下载”
   return $null
 }
 
@@ -492,13 +469,6 @@ function Get-CardHit($cards, [int]$x, [int]$y) {
   }
   if ($coverHit) { return $coverHit }
   return $rectHit
-}
-
-function Find-Downloaded([int]$seconds) {
-  if ($seconds -le 0) { return $null }
-  $list = $script:filesByDuration[$seconds]
-  if (-not $list -or $list.Count -eq 0) { return $null }
-  return ($list | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
 }
 
 function Shorten([string]$s, [int]$n) {
@@ -824,7 +794,6 @@ function Get-SaveProgress {
 
 # ---------------- Diagnose ----------------
 if ($Diagnose) {
-  Refresh-Index
   $p = Get-WeChatHost
   if (-not $p) { Write-Host "没有找到微信视频号主页窗口" -ForegroundColor Red; exit 1 }
   "微信 pid=$($p.Pid) hwnd=$($p.Hwnd) title=$($p.Title)"
@@ -839,8 +808,9 @@ if ($Diagnose) {
   $cards = Get-Cards $p.Hwnd
   "识别到卡片：$($cards.Count)"
   foreach ($c in $cards) {
-    $hit = Find-Downloaded $c.Seconds
-    $state = if ($hit) { "已下载 $($hit.Name)" } else { "未下载" }
+    $m = Get-BoundMedia $c
+    $e = if ($m) { Get-IndexedEntry $c $m } else { $null }
+    $state = if ($e) { "已下载 $(Split-Path $e.file -Leaf)" } else { "未下载" }
     "{0},{1} {2}x{3} | {4} | {5} | {6} | {7}" -f `
       [int]$c.Cover.X, [int]$c.Cover.Y, [int]$c.Cover.Width, [int]$c.Cover.Height,
       $c.Duration, $state, $c.Like
@@ -849,7 +819,6 @@ if ($Diagnose) {
 }
 
 # ---------------- HUD ----------------
-Refresh-Index
 Load-Index
 Load-Library
 Load-CardMedia
@@ -956,7 +925,6 @@ $script:lastTipUntil = [datetime]::MinValue
 $script:lastTipX = 0
 $script:lastTipY = 0
 $script:lastRefresh = [datetime]::MinValue
-$script:lastIndex = [datetime]::MinValue
 $script:visible = $false
 $script:StateFile = Join-Path $env:TEMP 'wx_hud_state.log'
 $script:HudLog = Join-Path $PSScriptRoot 'work\hud.log'
@@ -1008,15 +976,12 @@ function Update-Badges($cards) {
   try {
     $list = @()
     foreach ($c in $cards) {
-      $e = Get-IndexedEntry $c $null
-      if (-not $e) {
-        $hit = Find-Downloaded $c.Seconds
-        if ($hit) { $e = [pscustomobject]@{ file = $hit.FullName } }
-      }
+      $media = Get-BoundMedia $c
+      $e = if ($media) { Get-IndexedEntry $c $media } else { $null }
       if ($e) { $list += [pscustomobject]@{ Card = $c; File = $e.file } }
     }
     $sig = ($list | ForEach-Object {
-        "{0}:{1}:{2}" -f [int]$_.Card.Cover.X, [int]$_.Card.Cover.Y, $_.Card.Duration
+        "{0}:{1}:{2}:{3}" -f [int]$_.Card.Cover.X, [int]$_.Card.Cover.Y, $_.Card.Duration, $_.File
       }) -join ';'
     if ($sig -eq $script:badgeSig -and $badgeWin.IsVisible) {
       if ($script:badgeHwnd) {
@@ -1090,7 +1055,6 @@ function Update-Hud {
       } catch {
         $script:flowOffset = [long](Get-Item -LiteralPath $FlowsFile -ErrorAction SilentlyContinue).Length
       }
-      $script:filesByDuration = @{}
       $script:lastCard = $null
       $script:lastTipCard = $null
       $script:hoverKey = ''
@@ -1158,7 +1122,6 @@ function Update-Hud {
     if ([HudNative]::IsIconic($p.Hwnd)) { Hide-Hud; Hide-Badges; return }
 
     $now = Get-Date
-    if (($now - $script:lastIndex).TotalSeconds -gt 5) { Refresh-Index; $script:lastIndex = $now }
     if (($now - $script:lastRefresh).TotalMilliseconds -gt 600) {
       $script:cards = Get-Cards $p.Hwnd
       $script:lastRefresh = $now
@@ -1232,7 +1195,7 @@ function Update-Hud {
           Write-HudLog ("bind card=$ckey m=$($hits[0].M)")
 
           # 先把条目写进库，后面的封面/大小查询再慢也不能让 hover 白触发
-          $idx = Get-IndexedEntry $hitCard $null
+          $idx = Get-IndexedEntry $hitCard $hits[0]
           $libStatus = if ($idx) { 'downloaded' } else { 'available' }
           $fields = @{
             id = $hits[0].M
@@ -1330,16 +1293,9 @@ function Update-Hud {
       $status.Foreground = $green
       $meta.Text = "时长 $($card.Duration) · $(Split-Path $indexed.file -Leaf)"
     } else {
-      $hit = Find-Downloaded $card.Seconds
-      if ($hit) {
-        $status.Text = "✓ 已下载（按时长匹配）"
-        $status.Foreground = $green
-        $meta.Text = "时长 $($card.Duration) · $($hit.Name)"
-      } else {
-        $status.Text = "未下载"
-        $status.Foreground = $amber
-        $meta.Text = "时长 $($card.Duration) · 点赞 $($card.Like) · 悬停播放后按 F8 保存"
-      }
+      $status.Text = "未下载"
+      $status.Foreground = $amber
+      $meta.Text = "时长 $($card.Duration) · 点赞 $($card.Like) · 悬停播放后按 F8 保存"
     }
 
     Show-Hud
