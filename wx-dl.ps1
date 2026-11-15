@@ -222,6 +222,18 @@ function Restore-SystemProxy($snap) {
   [WinInetX]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
   [WinInetX]::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
 }
+$script:lastProxyCheck = [DateTime]::MinValue
+function Assert-SystemProxy([int]$port) {
+  $now = Get-Date
+  if (($now - $script:lastProxyCheck).TotalSeconds -lt 3) { return }
+  $script:lastProxyCheck = $now
+  $want = "127.0.0.1:$port"
+  $p = Get-ItemProperty $RegPath
+  if ([int]$p.ProxyEnable -ne 1 -or [string]$p.ProxyServer -ne $want) {
+    Set-SystemProxy $want
+    Write-Step "系统代理被其他程序改回，已重新指向 $want"
+  }
+}
 
 # ---------- 4. 从内存取明文头并拼接 ----------
 if (-not ('MemScan' -as [type])) { Add-Type -Path $MemScanCs }
@@ -814,6 +826,7 @@ $maxAttempts = 3
 
 try {
   while ($true) {
+    Assert-SystemProxy $Port
     if ($NoAuto) { Start-Sleep -Seconds 2; continue }
 
     # 1) 先消化待处理队列（一轮只干一件，避免同时扫内存）
