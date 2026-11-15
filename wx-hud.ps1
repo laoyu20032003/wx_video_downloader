@@ -167,6 +167,7 @@ $script:flowTail = ''
 $script:recentMedia = New-Object System.Collections.ArrayList
 $script:mediaFirst = @{}
 $script:cardMedia = @{}
+$script:CardMediaFile = Join-Path $PSScriptRoot 'work\card_media.json'
 $script:hoverKey = ''
 $script:hoverStart = [datetime]::MinValue
 $script:index = @{}
@@ -335,6 +336,44 @@ function Save-Index {
     $entries = @($script:index.Values | Sort-Object time -Descending)
     [pscustomobject]@{ entries = $entries } | ConvertTo-Json -Depth 6 |
       Set-Content -LiteralPath $IndexFile -Encoding utf8
+  } catch { }
+}
+
+function Load-CardMedia {
+  $script:cardMedia = @{}
+  if (-not (Test-Path -LiteralPath $script:CardMediaFile)) { return }
+  try {
+    $j = Get-Content -LiteralPath $script:CardMediaFile -Raw | ConvertFrom-Json
+    $cut = (Get-Date).AddHours(-2)
+    foreach ($e in @($j.entries)) {
+      if (-not $e -or -not $e.key -or -not $e.url -or -not $e.m) { continue }
+      $t = [DateTime]::MinValue
+      try { $t = [DateTime]::Parse([string]$e.time, [Globalization.CultureInfo]::InvariantCulture) } catch { }
+      if ($t -lt $cut) { continue }
+      $script:cardMedia[[string]$e.key] = [pscustomobject]@{
+        M = [string]$e.m; Url = [string]$e.url; Time = $t; Duration = [string]$e.duration
+      }
+    }
+  } catch { }
+}
+
+function Save-CardMedia {
+  try {
+    $parent = Split-Path -Parent $script:CardMediaFile
+    if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    $entries = @()
+    foreach ($k in @($script:cardMedia.Keys)) {
+      $m = $script:cardMedia[$k]
+      if (-not $m.Url -or -not $m.M) { continue }
+      $entries += [pscustomobject]@{
+        key = [string]$k; m = [string]$m.M; url = [string]$m.Url
+        time = $m.Time.ToString('o'); duration = [string]$m.Duration
+      }
+    }
+    $tmp = $script:CardMediaFile + '.tmp'
+    [pscustomobject]@{ entries = $entries } | ConvertTo-Json -Depth 5 |
+      Set-Content -LiteralPath $tmp -Encoding utf8
+    Move-Item -LiteralPath $tmp -Destination $script:CardMediaFile -Force
   } catch { }
 }
 
@@ -802,6 +841,7 @@ if ($Diagnose) {
 Refresh-Index
 Load-Index
 Load-Library
+Load-CardMedia
 # 只从启动之后新增的 flows 行里取“当前播放”，避免把历史 URL 当成正在播放
 if (Test-Path -LiteralPath $FlowsFile) { $script:flowOffset = [long](Get-Item -LiteralPath $FlowsFile).Length }
 
@@ -1030,7 +1070,6 @@ function Update-Hud {
       Save-Index
       $script:recentMedia.Clear()
       $script:mediaFirst = @{}
-      $script:cardMedia = @{}
       $script:autoLibraryAt = @{}
       $script:suppressLibraryUntil = (Get-Date).AddSeconds(5)
       try {
@@ -1134,6 +1173,23 @@ function Update-Hud {
         $script:hoverStart = Get-Date
         Write-HudLog ("hover-start key=$ckey fallback=$usedFallback")
       }
+      if ($script:cardMedia.ContainsKey($ckey)) {
+        $bm = $script:cardMedia[$ckey]
+        if ($bm.M -and -not $script:Library.ContainsKey([string]$bm.M)) {
+          Update-LibraryEntry @{
+            id = [string]$bm.M
+            duration = $hitCard.Duration
+            url = [string]$bm.Url
+            cover = ''
+            size = 0
+            width = 0
+            height = 0
+            status = 'available'
+            source = 'card'
+          }
+          Write-HudLog ("bind-cached key=$ckey m=$($bm.M)")
+        }
+      }
       $hoverAge = ((Get-Date) - $script:hoverStart).TotalSeconds
       $needBind = ($hoverAge -ge $HoverDwellSeconds) -and (-not $script:cardMedia.ContainsKey($ckey))
       if (-not $needBind -and $script:cardMedia.ContainsKey($ckey)) {
@@ -1146,8 +1202,9 @@ function Update-Hud {
           Sort-Object -Property First)
         if ($hits.Count -gt 0) {
           $script:cardMedia[$ckey] = [pscustomobject]@{
-            M = $hits[0].M; Url = $hits[0].Url; Time = Get-Date
+            M = $hits[0].M; Url = $hits[0].Url; Time = Get-Date; Duration = $hitCard.Duration
           }
+          Save-CardMedia
           Write-HudLog ("bind card=$ckey m=$($hits[0].M)")
 
           # 先把条目写进库，后面的封面/大小查询再慢也不能让 hover 白触发
