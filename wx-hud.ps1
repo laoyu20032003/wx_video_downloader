@@ -541,6 +541,9 @@ function Get-PlayerInfo {
   if (($now - $script:playerInfoAt).TotalSeconds -lt 1.5) { return $script:playerInfoCache }
   $script:playerInfoAt = $now
   $result = $null
+  $results = @()
+  $durTexts = @()
+  $fg = [HudNative]::GetForegroundWindow()
   try {
     $root = [System.Windows.Automation.AutomationElement]::RootElement
     $wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children,
@@ -561,6 +564,7 @@ function Get-PlayerInfo {
           try {
             $name = [string]$t.Current.Name
             if ($name -match '^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*/\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$') {
+              $durTexts += $name
               $dur = (($name -split '/')[-1]).Trim()
               $a = [int]$matches[1] * 60 + [int]$matches[2]
               if ($matches[3]) { $a = $a * 60 + [int]$matches[3] }
@@ -573,14 +577,20 @@ function Get-PlayerInfo {
           } catch { }
         }
         if ($secs -gt 0) {
-          $result = [pscustomobject]@{
+          $results += [pscustomobject]@{
             Rect = $rect; Duration = $dur; Seconds = $secs; Description = $desc
+            Hwnd = $w.Current.NativeWindowHandle; Area = ($rect.Width * $rect.Height)
           }
-          break
         }
       } catch { }
     }
   } catch { }
+  if ($results.Count -gt 0) {
+    $result = @($results | Sort-Object -Property `
+      @{ Expression = { [int]($_.Hwnd -eq $fg) }; Descending = $true }, `
+      @{ Expression = { $_.Area }; Descending = $true } | Select-Object -First 1)[0]
+    Write-HudLog ("player-durs hwnd=$($result.Hwnd) fg=$fg dur=$($result.Duration) texts=$($durTexts -join '|')")
+  }
   $script:playerInfoCache = $result
   return $result
 }
@@ -627,6 +637,12 @@ function Update-PlayedLibrary($card, $playerInfo) {
   if ($playerInfo) {
     $cap = [string]$playerInfo.Description
     $dur = [string]$playerInfo.Duration
+    try {
+      [pscustomobject]@{
+        title = $cap; duration = $dur; seconds = [int]$playerInfo.Seconds
+        updated = (Get-Date).ToString('o')
+      } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot 'work\player.json') -Encoding utf8
+    } catch { }
     $key = $cap + '|' + $dur
     $isNew = $key -and ($script:lastPlayerKey -eq '' -or $key -ne $script:lastPlayerKey)
     if ($isNew) {
@@ -654,11 +670,17 @@ function Update-PlayedLibrary($card, $playerInfo) {
       if (-not $mapped) {
         $pool = @($cands | Where-Object { $_.First -and ($now - $_.First).TotalSeconds -le 12 })
         if ($pool.Count -eq 0) { $pool = $cands }
-        $withM = @($pool | Where-Object { $_.HasM })
-        if ($withM.Count -gt 0) { $pool = $withM }
-        # 当前播放通常下载得最多；预加载通常还未开始时/数据更少
-        $pick = @($pool | Sort-Object -Property @{ Expression = { $_.MaxEnd }; Descending = $true },
-          @{ Expression = { $_.First }; Descending = $true } | Select-Object -First 1)
+        # 标题变化时，当前视频的媒体请求通常就在变化前 0~2 秒开始；
+        # 不要选“下载字节最多”的，因为下一条预加载往往反而更大。
+        $target = $now.AddSeconds(-1)
+        $diag = @($pool | ForEach-Object {
+            $id8 = ([string]$_.M).Substring(0, [Math]::Min(8, ([string]$_.M).Length))
+            "$id8@$([int](($_.First - $target).TotalSeconds))s/$([int]($_.MaxEnd / 1MB))MB"
+          }) -join ','
+        Write-HudLog ("player-pool target=$($target.ToString('HH:mm:ss')) $diag")
+        $pick = @($pool | Sort-Object -Property `
+          @{ Expression = { [Math]::Abs(($_.First - $target).TotalSeconds) }; Ascending = $true }, `
+          @{ Expression = { $_.MaxEnd }; Descending = $true } | Select-Object -First 1)
         if ($pick.Count -gt 0) {
           $pid2 = [string]$pick[0].M
           $script:currentMediaId = $pid2

@@ -146,6 +146,9 @@ $script:UiLogLines = New-Object System.Collections.Generic.List[string]
 $script:PendingFile = Join-Path $Work 'pending.json'
 $script:PendingIds = @{}
 $script:LibraryStamp = [DateTime]::MinValue
+$script:PlayerFile = Join-Path $Work 'player.json'
+$script:PlayerNow = $null
+$script:PlayerStamp = [DateTime]::MinValue
 
 function Write-GuiLog([string]$msg) {
   try { Add-Content -LiteralPath $script:GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -Encoding utf8 } catch { }
@@ -592,6 +595,22 @@ $openBtn.Padding = New-Object System.Windows.Thickness(12, 4, 12, 4)
 $openBtn.Add_Click({ if (Test-Path -LiteralPath $OutDir) { Start-Process explorer.exe $OutDir } })
 $top.Children.Add($openBtn) | Out-Null
 
+$playBlock = New-Object System.Windows.Controls.TextBlock
+$playBlock.Foreground = $grey
+$playBlock.VerticalAlignment = 'Center'
+$playBlock.Margin = New-Object System.Windows.Thickness(18, 3, 0, 0)
+$playBlock.MaxWidth = 300
+$playBlock.TextTrimming = 'CharacterEllipsis'
+$playBlock.Text = '当前播放：—'
+$top.Children.Add($playBlock) | Out-Null
+
+$bindBtn = New-Object System.Windows.Controls.Button
+$bindBtn.Content = '绑定当前播放'
+$bindBtn.Margin = New-Object System.Windows.Thickness(8, 0, 0, 0)
+$bindBtn.Padding = New-Object System.Windows.Thickness(10, 4, 10, 4)
+$bindBtn.Add_Click({ Bind-PlayerToSelected })
+$top.Children.Add($bindBtn) | Out-Null
+
 $ns = 'xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"'
 $headerXaml = @"
 <Grid $ns Background="#252526" Height="34">
@@ -757,6 +776,56 @@ function Show-RowDetails($row) {
   ) -join "`r`n"
 }
 
+function Update-PlayerNow {
+  if (-not (Test-Path -LiteralPath $script:PlayerFile)) { return }
+  try { $stamp = (Get-Item -LiteralPath $script:PlayerFile).LastWriteTimeUtc } catch { return }
+  if ($stamp -eq $script:PlayerStamp) { return }
+  $script:PlayerStamp = $stamp
+  try { $p = Get-Content -LiteralPath $script:PlayerFile -Raw | ConvertFrom-Json } catch { return }
+  $script:PlayerNow = $p
+  $t = [string]$p.title
+  if ($t.Length -gt 36) { $t = $t.Substring(0, 36) + '…' }
+  $playBlock.Text = "当前播放：$t"
+}
+
+function Bind-PlayerToSelected {
+  $row = $list.SelectedItem
+  if (-not $row) {
+    [System.Windows.MessageBox]::Show('先在列表里选中一条，再点“绑定当前播放”。', '视频号视频库') | Out-Null
+    return
+  }
+  $p = $script:PlayerNow
+  if (-not $p -or -not $p.title) {
+    [System.Windows.MessageBox]::Show('还没有读到播放器标题；请先在播放窗口播放一条视频。', '视频号视频库') | Out-Null
+    return
+  }
+  $t = [string]$p.title
+  $d = [string]$p.duration
+  try {
+    $j = Get-Content -LiteralPath $LibraryFile -Raw | ConvertFrom-Json
+    $entries = @($j.entries)
+    $found = $false
+    foreach ($e in $entries) {
+      if ([string]$e.id -eq $row.Id) {
+        $e | Add-Member -NotePropertyName title -NotePropertyValue $t -Force
+        $e | Add-Member -NotePropertyName duration -NotePropertyValue $d -Force
+        $e | Add-Member -NotePropertyName source -NotePropertyValue 'manual' -Force
+        $e | Add-Member -NotePropertyName updated -NotePropertyValue ((Get-Date).ToString('o')) -Force
+        $found = $true
+      }
+    }
+    if ($found) {
+      $tmp = $LibraryFile + '.tmp'
+      [pscustomobject]@{ updated = (Get-Date).ToString('o'); entries = $entries } |
+        ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tmp -Encoding utf8
+      Move-Item -LiteralPath $tmp -Destination $LibraryFile -Force
+      $row.Title = $t
+      $row.Duration = $d
+      Write-GuiLog ("manual-bind id=$($row.Id) title=$t")
+    }
+  } catch { }
+}
+
 $list.Add_SelectionChanged({
   Show-RowDetails $list.SelectedItem
 })
@@ -826,6 +895,7 @@ function Check-Pending {
 $timer.Add_Tick({
   Update-ListenerStatus
   Update-Count
+  Update-PlayerNow
   Sync-Library
   Check-Pending
   foreach ($id in @($script:Jobs.Keys)) {
