@@ -27,9 +27,7 @@ param(
   [switch]$NoAuto,
   [switch]$Hud,
   [string]$SaveUrl = "",
-  [string]$SaveTag = "",
-  [switch]$DumpHeaders,
-  [string]$HeaderTag = ""
+  [string]$SaveTag = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -227,42 +225,6 @@ function Restore-SystemProxy($snap) {
 # ---------- 4. 从内存取明文头并拼接 ----------
 if (-not ('MemScan' -as [type])) { Add-Type -Path $MemScanCs }
 
-# 只把内存里的候选头 dump 到 work\headers\<id>\，不下载密文。
-# 悬停/播放时调用一次；以后 URL 还有效时可以直接用缓存头拼接，不用视频正在播放。
-if ($DumpHeaders) {
-  $tag = if ($HeaderTag) { $HeaderTag } else { 'pool' }
-  $tag = ($tag -replace '[^0-9A-Za-z_-]', '')
-  if (-not $tag) { $tag = 'pool' }
-  $dir = Join-Path $Work "headers\$tag"
-  New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  $procs = Get-CimInstance Win32_Process -Filter "Name='WeChatAppEx.exe'" |
-    Where-Object { $_.WorkingSetSize -gt 60MB } | Sort-Object WorkingSetSize -Descending
-  $tmp = Join-Path $Work 'hdr_dump.tmp'
-  $seen = @{}
-  $n = 0
-  foreach ($p in $procs) {
-    foreach ($a in [MemScan]::Scan([int]$p.ProcessId, 20)) {
-      if ($a -lt 0) { continue }
-      if (-not [MemScan]::Dump([int]$p.ProcessId, [long]$a, 131072, $tmp)) { continue }
-      $bytes = [System.IO.File]::ReadAllBytes($tmp)
-      if ($bytes.Length -lt 4096) { continue }
-      $md5 = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash($bytes)) -replace '-', ''
-      if ($seen.ContainsKey($md5)) { continue }
-      $seen[$md5] = 1
-      $path = Join-Path $dir ($md5 + '.bin')
-      if (-not (Test-Path -LiteralPath $path)) {
-        [System.IO.File]::WriteAllBytes($path, $bytes)
-        $n++
-      }
-      if ($n -ge 20) { break }
-    }
-    if ($n -ge 20) { break }
-  }
-  Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
-  Write-Output "HEADERS=$n"
-  exit 0
-}
-
 # 判断「这份明文头是不是这条视频的」：
 # 微信同时会在内存里留好几条视频的解密头（实测三条不同视频拿到同一份头），
 # 拿别人的头去拼，ffprobe 会报 broken header / contradictionary STSC and STCO。
@@ -360,77 +322,6 @@ function Get-RealDecodeErrors([string]$path) {
   return @($lines | Where-Object { $_ -and ($_ -notmatch $script:BenignDecodeMsg) }).Count
 }
 
-function Try-BuildCandidate([byte[]]$Header, [string]$Cipher, [string]$Candidate, [int]$EncLen, [string]$Source) {
-  $lay = Test-Mp4Layout -Header $Header -Cipher $Cipher -EncLen $EncLen
-  if (-not $lay.Ok) {
-    Write-Warn ("  跳过候选 {0}：{1}" -f $Source, $lay.Reason)
-    return $null
-  }
-  $script:fixGate++
-
-  # 拼接：明文头 + 密文尾部。尾部用文件流按偏移读，不把整段密文驻留内存。
-  $fsOut = $null
-  $src = $null
-  try {
-    $fsOut = [System.IO.File]::Create($Candidate)
-    $fsOut.Write($Header, 0, $Header.Length)
-    $src = [System.IO.File]::OpenRead($Cipher)
-    $src.Position = [long]$EncLen
-    $buf = New-Object byte[] (1048576)
-    while ($true) {
-      $n = $src.Read($buf, 0, $buf.Length)
-      if ($n -le 0) { break }
-      $fsOut.Write($buf, 0, $n)
-    }
-  }
-  catch {
-    Write-Warn "  拼接失败: $($_.Exception.Message)"
-    return $null
-  }
-  finally {
-    if ($src) { $src.Dispose() }
-    if ($fsOut) { $fsOut.Dispose() }
-  }
-
-  # 下面每一步都可能因为「这个头不是这条视频的」而报错，必须就地吃掉：
-  # 一条错头不能把整个候选循环踢出去，否则退化成「只试第一个候选」
-  $dur = 0
-  try {
-    $durRaw = & $Ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 $Candidate 2> $script:fixErr
-    $dur = "$durRaw".Trim() -as [double]
-  }
-  catch { $dur = 0 }
-  if (-not $dur -or $dur -le 1) { return $null }
-
-  $probeOk = $true
-  try {
-    & $Ffmpeg -v error -i $Candidate -t 3 -f null - 2> $script:fixErr
-    if ($LASTEXITCODE -ne 0) { $probeOk = $false }
-    elseif ((Get-RealDecodeErrors $script:fixErr) -gt 0) { $probeOk = $false }
-  }
-  catch { $probeOk = $false }
-  if (-not $probeOk) { return $null }
-
-  Write-Step ("命中：{0} 时长={1:N1}s，全片校验 ..." -f $Source, $dur)
-  $fullOk = $true
-  try {
-    & $Ffmpeg -v error -i $Candidate -f null - 2> $script:fixErr
-    if ($LASTEXITCODE -ne 0) { $fullOk = $false }
-    elseif ((Get-RealDecodeErrors $script:fixErr) -gt 0) { $fullOk = $false }
-  }
-  catch { $fullOk = $false }
-  if (-not $fullOk) { return $null }
-
-  $info = & $Ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 $Candidate
-  $wh = ("$info" -split ',')
-  $h = if ($wh.Count -ge 2) { [Math]::Min([int]$wh[0], [int]$wh[1]) } else { '?' }
-  $name = "视频号_$(Get-Date -Format 'yyyyMMdd_HHmmss')_${h}p_$([math]::Round($dur,0))s.mp4"
-  $outPath = Join-Path $OutDir $name
-  Copy-Item -LiteralPath $Candidate -Destination $outPath -Force
-  Write-Host "  已保存: $outPath" -ForegroundColor Green
-  return $outPath
-}
-
 function Invoke-Fix([string]$url, [string]$tag) {
   $cipher = Join-Path $Work "cipher_$tag.bin"
   $candidate = Join-Path $Work "cand_$tag.mp4"
@@ -470,29 +361,11 @@ function Invoke-Fix([string]$url, [string]$tag) {
 
   $procs = Get-CimInstance Win32_Process -Filter "Name='WeChatAppEx.exe'" |
     Where-Object { $_.WorkingSetSize -gt 60MB } | Sort-Object WorkingSetSize -Descending
-
-  $script:fixErr = $errFile
-  $script:fixGate = 0
-  $candCount = 0
-
-  # 优先用悬停/播放时缓存下来的头：URL 还有效时，不需要视频正在播放
-  $cacheDir = Join-Path $Work "headers\$tag"
-  if (Test-Path -LiteralPath $cacheDir) {
-    Write-Step "尝试缓存明文头 ..."
-    foreach ($f in @(Get-ChildItem -LiteralPath $cacheDir -Filter '*.bin' -File -ErrorAction SilentlyContinue |
-      Sort-Object LastWriteTime -Descending | Select-Object -First 30)) {
-      $pref = [System.IO.File]::ReadAllBytes($f.FullName)
-      if ($pref.Length -lt 4096) { continue }
-      $saved = Try-BuildCandidate $pref $cipher $candidate $enclen ("cache=" + $f.Name)
-      if ($saved) { return $saved }
-    }
-  }
+  if (-not $procs) { Write-Host "  没有 WeChatAppEx 进程，请先打开视频号" -ForegroundColor Red; return $null }
 
   $seen = @{}
-  if (-not $procs) {
-    Write-Host "  没有 WeChatAppEx 进程，缓存头也没命中：请先打开视频号并播放这条" -ForegroundColor Yellow
-    return $null
-  }
+  $candCount = 0
+  $gatePass = 0
   foreach ($p in $procs) {
     foreach ($a in [MemScan]::Scan([int]$p.ProcessId, 20)) {
       if ($a -lt 0) { continue }
@@ -507,18 +380,86 @@ function Invoke-Fix([string]$url, [string]$tag) {
       $seen[$key] = 1
       $candCount++
 
-      $saved = Try-BuildCandidate $pref $cipher $candidate $enclen ("pid={0} addr=0x{1:X}" -f $p.ProcessId, [long]$a)
-      if ($saved) { return $saved }
+      # 结构闸门：先判断这份头是不是这条视频的，再决定要不要拼 46MB
+      $lay = Test-Mp4Layout -Header $pref -Cipher $cipher -EncLen $enclen
+      if (-not $lay.Ok) {
+        Write-Warn ("  跳过候选 pid={0} 0x{1:X}：{2}" -f $p.ProcessId, [long]$a, $lay.Reason)
+        continue
+      }
+      $gatePass++
+
+      # 拼接：内存头 + 密文尾部。尾部用文件流按偏移读，不把整段密文驻留内存。
+      $fsOut = $null
+      $src = $null
+      try {
+        $fsOut = [System.IO.File]::Create($candidate)
+        $fsOut.Write($pref, 0, $pref.Length)
+        $src = [System.IO.File]::OpenRead($cipher)
+        $src.Position = [long]$enclen
+        $buf = New-Object byte[] (1048576)
+        while ($true) {
+          $n = $src.Read($buf, 0, $buf.Length)
+          if ($n -le 0) { break }
+          $fsOut.Write($buf, 0, $n)
+        }
+      }
+      catch {
+        Write-Warn "  拼接失败: $($_.Exception.Message)"
+        continue
+      }
+      finally {
+        if ($src) { $src.Dispose() }
+        if ($fsOut) { $fsOut.Dispose() }
+      }
+
+      # 下面每一步都可能因为「这个头不是这条视频的」而报错，必须就地吃掉：
+      # 一条错头把整个候选循环踢出去，就退化成「只试第一个候选」
+      $dur = 0
+      try {
+        $durRaw = & $Ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 $candidate 2> $errFile
+        $dur = "$durRaw".Trim() -as [double]
+      }
+      catch { $dur = 0 }
+      if (-not $dur -or $dur -le 1) { continue }
+
+      $probeOk = $true
+      try {
+        & $Ffmpeg -v error -i $candidate -t 3 -f null - 2> $errFile
+        if ($LASTEXITCODE -ne 0) { $probeOk = $false }
+        elseif ((Get-RealDecodeErrors $errFile) -gt 0) { $probeOk = $false }
+      }
+      catch { $probeOk = $false }
+      if (-not $probeOk) { continue }
+
+      Write-Step ("命中：pid={0} 地址=0x{1:X} 时长={2:N1}s，全片校验 ..." -f $p.ProcessId, [long]$a, $dur)
+      $fullOk = $true
+      try {
+        & $Ffmpeg -v error -i $candidate -f null - 2> $errFile
+        if ($LASTEXITCODE -ne 0) { $fullOk = $false }
+        elseif ((Get-RealDecodeErrors $errFile) -gt 0) { $fullOk = $false }
+      }
+      catch { $fullOk = $false }
+      if (-not $fullOk) { continue }
+
+      $info = & $Ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 $candidate
+      $wh = ("$info" -split ',')
+      $h = if ($wh.Count -ge 2) { [Math]::Min([int]$wh[0], [int]$wh[1]) } else { '?' }
+      $name = "视频号_$(Get-Date -Format 'yyyyMMdd_HHmmss')_${h}p_$([math]::Round($dur,0))s.mp4"
+      $outPath = Join-Path $OutDir $name
+      Copy-Item -LiteralPath $candidate -Destination $outPath -Force
+      Write-Host "  已保存: $outPath" -ForegroundColor Green
+      return $outPath
     }
   }
+
   if ($candCount -eq 0) {
     Write-Host "  内存里没有候选明文头：请把这条视频重新播放几秒再来（内存里只留最近播放的）" -ForegroundColor Yellow
   }
-  elseif ($script:fixGate -eq 0) {
+  elseif ($gatePass -eq 0) {
     Write-Host ("  {0} 个候选头都和这份密文对不上（都是别的视频的头），这条视频的头还没解码进内存：稍后重试或重播" -f $candCount) -ForegroundColor Yellow
   }
   else {
-    Write-Host ("  {0} 个候选头结构匹配，但都没通过解码校验：请在微信里重播这条视频再试" -f $script:fixGate) -ForegroundColor Yellow
+    Write-Host ("  {0} 个候选头结构匹配，但都没通过解码校验：请在微信里重播这条视频再试" -f $gatePass) -ForegroundColor Yellow
   }
   return $null
 }

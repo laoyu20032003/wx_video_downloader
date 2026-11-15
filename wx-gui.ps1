@@ -855,26 +855,19 @@ $timer.Add_Tick({
       $expected = Convert-DurationText $job.Row.Duration
       $actual = if ($info) { [int][Math]::Round($info.duration) } else { 0 }
       if ($expected -gt 0 -and $actual -gt 0 -and [Math]::Abs($expected - $actual) -gt 2) {
-        # 下到了别的视频：不写索引/库，保留文件供排查
-        Set-RowPending $job.Row $true
-        $job.Row.StatusText = '匹配错误'
-        $job.Row.StatusBrush = $red
-        $job.Row.ActionText = '重试'
-        $job.Row.File = ''
-        Write-GuiLog ("download-mismatch id=$($job.Row.Id) expected=${expected}s actual=${actual}s file=$saved")
-      } else {
-        $job.Row.File = $saved
-        $job.Row.StatusText = '下载完成'
-        $job.Row.StatusBrush = $green
-        $job.Row.ActionText = '打开'
-        $job.Row.SizeText = Format-Size ([long](Get-Item -LiteralPath $saved).Length)
-        if ($info -and $info.width -gt 0) { $job.Row.Resolution = "$($info.width)x$($info.height)" }
-        Save-LibraryPatch $job.Row
-        Save-IndexPatch $job.Row
-        Set-RowPending $job.Row $false
-        Write-GuiLog ("download-done id=$($job.Row.Id) file=$saved")
-        Update-Count
+        Write-GuiLog ("download-duration-warning id=$($job.Row.Id) expected=${expected}s actual=${actual}s file=$saved")
       }
+      $job.Row.File = $saved
+      $job.Row.StatusText = '下载完成'
+      $job.Row.StatusBrush = $green
+      $job.Row.ActionText = '打开'
+      $job.Row.SizeText = Format-Size ([long](Get-Item -LiteralPath $saved).Length)
+      if ($info -and $info.width -gt 0) { $job.Row.Resolution = "$($info.width)x$($info.height)" }
+      Save-LibraryPatch $job.Row
+      Save-IndexPatch $job.Row
+      Set-RowPending $job.Row $false
+      Write-GuiLog ("download-done id=$($job.Row.Id) file=$saved")
+      Update-Count
     } else {
       Set-RowPending $job.Row $true
       $job.Row.StatusText = '待重播'
