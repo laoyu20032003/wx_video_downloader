@@ -47,6 +47,15 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
   Write-Host "需要 STA 线程：请用  pwsh -Sta -File wx-hud.ps1" -ForegroundColor Yellow
   exit 1
 }
+try {
+  $script:HudMutex = New-Object System.Threading.Mutex($false, 'Local\wx_video_downloader_hud')
+  if (-not $script:HudMutex.WaitOne(0)) {
+    Write-Host "已有一个 wx-hud 在运行，退出。" -ForegroundColor Yellow
+    exit 0
+  }
+} catch [System.Threading.AbandonedMutexException] {
+  # 上一个 HUD 被强杀，互斥量已由本进程接管
+}
 
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -170,6 +179,7 @@ $script:cardMedia = @{}
 $script:CardMediaFile = Join-Path $PSScriptRoot 'work\card_media.json'
 $script:hoverKey = ''
 $script:hoverCandKey = ''
+$script:lastMode = ''
 $script:hoverStart = [datetime]::MinValue
 $script:index = @{}
 $script:saving = $false
@@ -1116,6 +1126,11 @@ function Update-Hud {
     $progress = if ($script:saving) { Get-SaveProgress } else { '' }
 
     $p = Get-WeChatHost
+    $mode = if ($p) { 'page' } elseif ($isWeChatFg) { 'player' } else { 'background' }
+    if ($mode -ne $script:lastMode) {
+      Write-HudLog ("mode=$mode fgpid=$fgPid cards=$(@($script:cards).Count)")
+      $script:lastMode = $mode
+    }
     if (-not $p) {
       if ($isWeChatFg) { Update-PlayedLibrary }
       Hide-Hud; Hide-Badges
