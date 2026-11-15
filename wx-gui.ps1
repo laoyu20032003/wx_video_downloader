@@ -41,6 +41,8 @@ public class WxVideoRow {
   public string Url { get; set; }
   public ImageSource CoverImage { get; set; }
   public string Updated { get; set; }
+  public bool Pending { get; set; }
+  public DateTime PendingAt { get; set; }
 }
 '@
   Add-Type -ReferencedAssemblies @(
@@ -112,9 +114,56 @@ $script:ProxyApplied = $false
 $script:HudPidFile = Join-Path $Work 'hud.pid'
 $script:ProxySnapshot = Join-Path $Work 'proxy_snapshot.json'
 $script:GuiLog = Join-Path $Work 'gui.log'
+$script:PendingFile = Join-Path $Work 'pending.json'
+$script:PendingIds = @{}
 
 function Write-GuiLog([string]$msg) {
   try { Add-Content -LiteralPath $script:GuiLog -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $msg) -Encoding utf8 } catch { }
+}
+
+function Load-Pending {
+  $script:PendingIds = @{}
+  if (-not (Test-Path -LiteralPath $script:PendingFile)) { return }
+  try {
+    $j = Get-Content -LiteralPath $script:PendingFile -Raw | ConvertFrom-Json
+    foreach ($e in @($j.entries)) {
+      if (-not $e.id) { continue }
+      $at = [DateTime]::MinValue
+      if ($e.at) { try { $at = [DateTime]::Parse([string]$e.at, [Globalization.CultureInfo]::InvariantCulture) } catch { } }
+      $script:PendingIds[[string]$e.id] = $at
+    }
+  } catch { }
+}
+
+function Save-Pending {
+  try {
+    $entries = @()
+    foreach ($r in $rows) {
+      if ($r.Pending) {
+        $entries += [pscustomobject]@{ id = $r.Id; at = $r.PendingAt.ToString('o') }
+      }
+    }
+    $tmp = $script:PendingFile + '.tmp'
+    [pscustomobject]@{ entries = $entries } | ConvertTo-Json -Depth 4 |
+      Set-Content -LiteralPath $tmp -Encoding utf8
+    Move-Item -LiteralPath $tmp -Destination $script:PendingFile -Force
+  } catch { }
+}
+
+function Set-RowPending($row, [bool]$on) {
+  $row.Pending = $on
+  if ($on) {
+    $row.PendingAt = Get-Date
+    $script:PendingIds[$row.Id] = $row.PendingAt
+    if (-not $row.File) {
+      $row.StatusText = '待重播'
+      $row.StatusBrush = $amber
+      $row.ActionText = '下载'
+    }
+  } else {
+    $script:PendingIds.Remove($row.Id)
+  }
+  Save-Pending
 }
 
 function Test-ListenerPort {
@@ -260,6 +309,13 @@ function New-Row($entry, [string]$fallbackTitle) {
   $row.Url = [string]$entry.url
   $row.CoverImage = $cover
   $row.Updated = [string]$entry.updated
+  $row.Pending = $false
+  if (-not $exists -and $script:PendingIds.ContainsKey($row.Id)) {
+    $row.Pending = $true
+    $row.PendingAt = $script:PendingIds[$row.Id]
+    $row.StatusText = '待重播'
+    $row.StatusBrush = $amber
+  }
   return $row
 }
 
@@ -350,7 +406,8 @@ function Invoke-RowAction($row) {
     return
   }
   if (-not $row.Url) {
-    [System.Windows.MessageBox]::Show("这条还没有可用的下载地址。`n`n请回到作者主页，悬停这条卡片 2～3 秒后按 F8；或先播放一遍，再回视频库点刷新。", '视频号视频库') | Out-Null
+    Set-RowPending $row $true
+    [System.Windows.MessageBox]::Show("这条还没有可用的下载地址，已加入待重播。`n`n请回到作者主页悬停这张卡片 2～3 秒；HUD 捕捉到新地址后，视频库会自动继续下载。", '视频号视频库') | Out-Null
     return
   }
   $tag = ($row.Id -replace '[^0-9A-Za-z_-]', '')
@@ -363,6 +420,7 @@ function Invoke-RowAction($row) {
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ToolScript,
       '-SaveUrl', $row.Url, '-SaveTag', $tag, '-OutDir', $OutDir
     ) -RedirectStandardOutput $out -RedirectStandardError $err
+    Set-RowPending $row $false
     $row.StatusText = '下载中…'
     $row.StatusBrush = $blue
     $row.ActionText = '下载中'
@@ -526,15 +584,54 @@ function Update-Count {
     default { $listenBlock.Text = '监听：…'; $listenBlock.Foreground = $grey }
   }
 }
+Load-Pending
 Load-Rows
 Start-Listener
 Update-Count
 
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromMilliseconds(600)
+
+function Check-Pending {
+  $pendingRows = @($rows | Where-Object { $_.Pending })
+  if ($pendingRows.Count -eq 0) { return }
+  if (-not (Test-Path -LiteralPath $LibraryFile)) { return }
+  try {
+    $lib = Get-Content -LiteralPath $LibraryFile -Raw | ConvertFrom-Json
+  } catch { return }
+  $map = @{}
+  foreach ($e in @($lib.entries)) { if ($e.id) { $map[[string]$e.id] = $e } }
+
+  foreach ($row in $pendingRows) {
+    if (-not $map.ContainsKey($row.Id)) { continue }
+    $e = $map[$row.Id]
+    if ($e.file -and (Test-Path -LiteralPath $e.file)) {
+      $row.File = [string]$e.file
+      $row.StatusText = '已下载'
+      $row.StatusBrush = $green
+      $row.ActionText = '打开'
+      Set-RowPending $row $false
+      continue
+    }
+    if (-not $e.url) { continue }
+    $updated = [DateTime]::MinValue
+    if ($e.updated) {
+      try { $updated = [DateTime]::Parse([string]$e.updated, [Globalization.CultureInfo]::InvariantCulture) } catch { }
+    }
+    if ($updated -le $row.PendingAt) { continue }
+    $row.Url = [string]$e.url
+    $row.StatusText = '下载中…'
+    $row.StatusBrush = $blue
+    $row.ActionText = '下载中'
+    Set-RowPending $row $false
+    Invoke-RowAction $row
+  }
+}
+
 $timer.Add_Tick({
   Update-ListenerStatus
   Update-Count
+  Check-Pending
   foreach ($id in @($script:Jobs.Keys)) {
     $job = $script:Jobs[$id]
     if (-not $job.Proc.HasExited) { continue }
@@ -550,12 +647,14 @@ $timer.Add_Tick({
       if ($info -and $info.width -gt 0) { $job.Row.Resolution = "$($info.width)x$($info.height)" }
       Save-LibraryPatch $job.Row
       Save-IndexPatch $job.Row
+      Set-RowPending $job.Row $false
       Update-Count
     } else {
-      $job.Row.StatusText = '需重播'
-      $job.Row.StatusBrush = $red
+      Set-RowPending $job.Row $true
+      $job.Row.StatusText = '待重播'
+      $job.Row.StatusBrush = $amber
       $job.Row.ActionText = '下载'
-      [System.Windows.MessageBox]::Show("下载失败。`n`n这条视频的签名地址可能已过期，或内存里已经没有明文头。`n请回到作者主页悬停这张卡片 2～3 秒，再按 F8；或先播放一遍后回视频库重试。", '视频号视频库') | Out-Null
+      [System.Windows.MessageBox]::Show("下载失败：签名地址可能已过期，或内存里没有明文头。`n`n已加入待重播。请在微信里重新播放这条视频（悬停卡片 2～3 秒），HUD 捕捉到新地址后视频库会自动继续下载。", '视频号视频库') | Out-Null
     }
     $script:Jobs.Remove($id)
   }
