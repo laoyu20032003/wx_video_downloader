@@ -603,6 +603,7 @@ function Check-Pending {
   foreach ($e in @($lib.entries)) { if ($e.id) { $map[[string]$e.id] = $e } }
 
   foreach ($row in $pendingRows) {
+    if ($script:Jobs.Count -gt 0) { break }
     if (-not $map.ContainsKey($row.Id)) { continue }
     $e = $map[$row.Id]
     if ($e.file -and (Test-Path -LiteralPath $e.file)) {
