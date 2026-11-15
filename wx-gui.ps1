@@ -31,7 +31,7 @@ using System;
 using System.ComponentModel;
 using System.Windows.Media;
 public class WxVideoRow : INotifyPropertyChanged {
-  private string _id, _shortId, _title, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated, _source, _coverPath;
+  private string _id, _shortId, _title, _duration, _sizeText, _resolution, _statusText, _actionText, _file, _url, _updated, _source, _coverPath, _coverMethod;
   private Brush _statusBrush;
   private ImageSource _coverImage;
   private bool _pending, _canAct;
@@ -52,6 +52,7 @@ public class WxVideoRow : INotifyPropertyChanged {
   public string Updated { get { return _updated; } set { if (_updated != value) { _updated = value; Raise("Updated"); } } }
   public string Source { get { return _source; } set { if (_source != value) { _source = value; Raise("Source"); } } }
   public string CoverPath { get { return _coverPath; } set { if (_coverPath != value) { _coverPath = value; Raise("CoverPath"); } } }
+  public string CoverMethod { get { return _coverMethod; } set { if (_coverMethod != value) { _coverMethod = value; Raise("CoverMethod"); } } }
   public bool Pending { get { return _pending; } set { if (_pending != value) { _pending = value; Raise("Pending"); } } }
   public DateTime PendingAt { get { return _pendingAt; } set { _pendingAt = value; Raise("PendingAt"); } }
   public bool CanAct { get { return _canAct; } set { if (_canAct != value) { _canAct = value; Raise("CanAct"); } } }
@@ -150,35 +151,45 @@ function Format-DurationSeconds([int]$sec) {
 }
 
 function Get-VideoCover([string]$file, [string]$id) {
+  $script:LastCoverMethod = ''
   try {
     $dir = Join-Path $Work 'covers'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $safe = ($id -replace '[^0-9A-Za-z_-]', '')
     $path = Join-Path $dir ($safe + '.jpg')
 
-    # 1) 优先用文件内嵌的封面图（attached_pic / covr）
+    # 1) 文件内嵌封面
     try {
       $probe = & ffprobe -v error -select_streams v -show_entries stream=index:stream_disposition=attached_pic -of json $file 2>$null | Out-String | ConvertFrom-Json
       $attached = @($probe.streams | Where-Object { $_.disposition.attached_pic -eq 1 } | Select-Object -First 1)
       if ($attached.Count -gt 0) {
         & ffmpeg -y -v error -i $file -map ("0:" + [string]$attached[0].index) -frames:v 1 -vf 'scale=320:-2' $path 2>$null
-        if (Test-Path -LiteralPath $path) { Write-GuiLog "cover-embedded id=$id"; return $path }
+        if (Test-Path -LiteralPath $path) {
+          $script:LastCoverMethod = 'embedded'
+          Write-GuiLog "cover-embedded id=$id"
+          return $path
+        }
       }
     } catch { }
 
-    # 2) 用 Windows 资源管理器同一套缩略图，避免和用户看到的预览不一致
+    # 2) 精确首帧（从 0 开始解码），微信/资源管理器通常就是这个
+    & ffmpeg -y -v error -i $file -frames:v 1 -vf 'scale=320:-2' $path 2>$null
+    if (Test-Path -LiteralPath $path) {
+      $script:LastCoverMethod = 'frame0'
+      Write-GuiLog "cover-frame0 id=$id"
+      return $path
+    }
+
+    # 3) Windows Shell 缩略图兜底
     if ('WxShellThumb' -as [type]) {
       try {
         if ([WxShellThumb]::Save($file, $path, 320, 320) -and (Test-Path -LiteralPath $path)) {
+          $script:LastCoverMethod = 'shell'
           Write-GuiLog "cover-shell id=$id"
           return $path
         }
       } catch { }
     }
-
-    # 3) 最后退回首帧
-    & ffmpeg -y -v error -ss 0.2 -i $file -frames:v 1 -vf 'scale=320:-2' $path 2>$null
-    if (Test-Path -LiteralPath $path) { Write-GuiLog "cover-frame id=$id"; return $path }
   } catch { }
   return $null
 }
@@ -232,6 +243,8 @@ $white = [System.Windows.Media.Brushes]::White
 $rows = New-Object System.Collections.ObjectModel.ObservableCollection[object]
 $script:Jobs = @{}
 $script:AutoAttempted = @{}
+$script:CoverQueue = New-Object System.Collections.Queue
+$script:CoverQueued = @{}
 $script:ListenerProc = $null
 $script:ListenerOwned = $false
 $script:ListenerState = 'idle'
@@ -467,6 +480,7 @@ function New-Row($entry, [string]$fallbackTitle) {
   $row.Url = [string]$entry.url
   $row.CoverImage = $cover
   $row.CoverPath = [string]$entry.cover
+  $row.CoverMethod = [string]$entry.coverMethod
   $row.Source = [string]$entry.source
   $row.Updated = [string]$entry.updated
   $row.Pending = $false
@@ -570,6 +584,7 @@ function Sync-Library {
         $row.CoverImage = $fresh.CoverImage
         $row.CoverPath = $fresh.CoverPath
       }
+      $row.CoverMethod = $fresh.CoverMethod
       $row.Source = $fresh.Source
       if ($fresh.File -or -not $row.File) {
         $row.File = $fresh.File
@@ -590,11 +605,37 @@ function Sync-Library {
       $rows.Insert(0, $row)
       $byId[$id] = $row
       $changed = $true
+      Queue-CoverRefresh $row
       Write-GuiLog ("library-new id=$id title=$($row.Title)")
     }
   }
   Disambiguate-Titles
   if ($changed) { Update-Count }
+}
+
+function Queue-CoverRefresh($row) {
+  if (-not $row -or -not $row.File) { return }
+  if ($row.Source -ne 'player') { return }
+  if ($row.CoverMethod -in @('embedded', 'frame0', 'shell')) { return }
+  if ($script:CoverQueued.ContainsKey($row.Id)) { return }
+  $script:CoverQueued[$row.Id] = $true
+  $script:CoverQueue.Enqueue($row)
+}
+
+function Process-CoverQueue {
+  if ($script:CoverQueue.Count -eq 0) { return }
+  $row = $script:CoverQueue.Dequeue()
+  if (-not $row -or -not $row.File -or -not (Test-Path -LiteralPath $row.File)) { return }
+  if ($row.CoverMethod -in @('embedded', 'frame0', 'shell')) { return }
+  $cover = Get-VideoCover $row.File $row.Id
+  if ($cover) {
+    $row.CoverPath = $cover
+    $row.CoverMethod = [string]$script:LastCoverMethod
+    $img = Load-Bitmap $cover
+    if ($img) { $row.CoverImage = $img }
+    Save-LibraryPatch $row
+    Write-GuiLog ("cover-refresh id=$($row.Id) method=$($row.CoverMethod)")
+  }
 }
 
 function Save-LibraryPatch($row) {
@@ -618,6 +659,7 @@ function Save-LibraryPatch($row) {
     $e | Add-Member -NotePropertyName file -NotePropertyValue $row.File -Force
     $e | Add-Member -NotePropertyName status -NotePropertyValue 'downloaded' -Force
     if ($row.CoverPath) { $e | Add-Member -NotePropertyName cover -NotePropertyValue $row.CoverPath -Force }
+    if ($row.CoverMethod) { $e | Add-Member -NotePropertyName coverMethod -NotePropertyValue $row.CoverMethod -Force }
     if ($row.Source) { $e | Add-Member -NotePropertyName source -NotePropertyValue $row.Source -Force }
     $e | Add-Member -NotePropertyName updated -NotePropertyValue ((Get-Date).ToString('o')) -Force
     $entries[$row.Id] = $e
@@ -1032,6 +1074,7 @@ function Update-Count {
 Load-CacheEpoch
 Load-Pending
 Load-Rows
+foreach ($r in @($rows)) { Queue-CoverRefresh $r }
 Write-GuiLog "gui-start library=$LibraryFile"
 if ('WxShellThumb' -as [type]) { Write-GuiLog 'shell-thumb-ready' } else { Write-GuiLog 'shell-thumb-unavailable' }
 Start-Listener
@@ -1094,6 +1137,7 @@ $timer.Add_Tick({
   Update-ListenerStatus
   Update-Count
   Sync-Library
+  Process-CoverQueue
   Start-AutoDownload
   Check-Pending
   foreach ($id in @($script:Jobs.Keys)) {
@@ -1137,6 +1181,7 @@ $timer.Add_Tick({
       } else { $null }
       if ($cover) {
         $job.Row.CoverPath = $cover
+        $job.Row.CoverMethod = [string]$script:LastCoverMethod
         $img = Load-Bitmap $cover
         if ($img) { $job.Row.CoverImage = $img }
       }
