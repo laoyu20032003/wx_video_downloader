@@ -30,6 +30,7 @@ param(
   [int]$PinX = -1,
   [int]$PinY = -1,
   [int]$LingerSeconds = 4,
+  [double]$HoverDwellSeconds = 2.0,
   [switch]$DebugState,
   [string]$FlowsFile = "",
   [string]$IndexFile = "",
@@ -461,6 +462,7 @@ function Shorten([string]$s, [int]$n) {
 $script:LibraryFile = Join-Path $PSScriptRoot 'work\library.json'
 $script:Library = @{}
 $script:noLibraryMerge = $false
+$script:noLibraryMergeUntil = [DateTime]::MinValue
 
 function Load-Library {
   $script:Library = @{}
@@ -491,7 +493,7 @@ function Save-Library {
   try {
     # HUD 和 GUI 都会写 library.json；写之前把磁盘上更新的 title/cover/file 合并回来，
     # 避免 HUD 用旧内存状态把 GUI 刚写好的标题覆盖掉。
-    if (-not $script:noLibraryMerge -and (Test-Path -LiteralPath $script:LibraryFile)) {
+    if (-not $script:noLibraryMerge -and (Get-Date) -ge $script:noLibraryMergeUntil -and (Test-Path -LiteralPath $script:LibraryFile)) {
       try {
         $disk = Get-Content -LiteralPath $script:LibraryFile -Raw | ConvertFrom-Json
         foreach ($de in @($disk.entries)) {
@@ -587,9 +589,11 @@ function Get-VideoInfo([string]$file) {
 }
 
 $script:autoLibraryAt = @{}
+$script:suppressLibraryUntil = [DateTime]::MinValue
 function Update-PlayedLibrary($card) {
   # 卡片页由悬停绑定精确写入；这里只负责播放窗口里“点开/播放过”的视频
   if ($card) { return }
+  if ((Get-Date) -lt $script:suppressLibraryUntil) { return }
   $now = Get-Date
 
   $cands = @(Get-MediaCandidates 20)
@@ -1010,6 +1014,7 @@ function Update-Hud {
       $script:saving = $false
       $script:saveProc = $null
       $script:noLibraryMerge = $true
+      $script:noLibraryMergeUntil = (Get-Date).AddSeconds(15)
       $script:Library = @{}
       Remove-Item -LiteralPath $script:LibraryFile -ErrorAction SilentlyContinue
       Save-Library
@@ -1020,6 +1025,7 @@ function Update-Hud {
       $script:mediaFirst = @{}
       $script:cardMedia = @{}
       $script:autoLibraryAt = @{}
+      $script:suppressLibraryUntil = (Get-Date).AddSeconds(5)
       $script:filesByDuration = @{}
       $script:lastCard = $null
       $script:lastTipCard = $null
@@ -1104,8 +1110,9 @@ function Update-Hud {
         $script:hoverKey = $ckey
         $script:hoverStart = Get-Date
       }
-      $needBind = -not $script:cardMedia.ContainsKey($ckey)
-      if (-not $needBind) {
+      $hoverAge = ((Get-Date) - $script:hoverStart).TotalSeconds
+      $needBind = ($hoverAge -ge $HoverDwellSeconds) -and (-not $script:cardMedia.ContainsKey($ckey))
+      if (-not $needBind -and $script:cardMedia.ContainsKey($ckey)) {
         $needBind = ((Get-Date) - $script:cardMedia[$ckey].Time).TotalSeconds -gt 60
       }
       if ($needBind) {
