@@ -670,9 +670,10 @@ function Update-PlayedLibrary($card, $playerInfo) {
             size = $msize; status = $mstatus; source = 'player'
           }
           Write-HudLog ("player-map id=$pid2 dur=$dur title=$($cap.Substring(0, [Math]::Min(30, $cap.Length)))")
+          $mapped = $true
         }
       }
-      $script:lastPlayerKey = $key
+      if ($mapped) { $script:lastPlayerKey = $key }
     }
   }
 
