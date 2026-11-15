@@ -155,6 +155,7 @@ $white = [System.Windows.Media.Brushes]::White
 
 $rows = New-Object System.Collections.ObjectModel.ObservableCollection[object]
 $script:Jobs = @{}
+$script:AutoAttempted = @{}
 $script:ListenerProc = $null
 $script:ListenerOwned = $false
 $script:ListenerState = 'idle'
@@ -463,8 +464,10 @@ function Sync-Library {
       $row.SizeText = $fresh.SizeText
       $row.Resolution = $fresh.Resolution
       $row.Url = $fresh.Url
-      $row.CoverImage = $fresh.CoverImage
-      $row.CoverPath = $fresh.CoverPath
+      if ($fresh.CoverPath -and (Test-Path -LiteralPath $fresh.CoverPath)) {
+        $row.CoverImage = $fresh.CoverImage
+        $row.CoverPath = $fresh.CoverPath
+      }
       $row.Source = $fresh.Source
       if ($fresh.File -or -not $row.File) {
         $row.File = $fresh.File
@@ -504,8 +507,10 @@ function Save-LibraryPatch($row) {
     }
     $e = if ($entries.ContainsKey($row.Id)) { $entries[$row.Id] } else { [pscustomobject]@{} }
     $e | Add-Member -NotePropertyName id -NotePropertyValue $row.Id -Force
-    $e | Add-Member -NotePropertyName title -NotePropertyValue $row.Title -Force
-    $e | Add-Member -NotePropertyName duration -NotePropertyValue $row.Duration -Force
+    if ($row.Title) { $e | Add-Member -NotePropertyName title -NotePropertyValue $row.Title -Force }
+    if ($row.Duration -and $row.Duration -ne '—') {
+      $e | Add-Member -NotePropertyName duration -NotePropertyValue $row.Duration -Force
+    }
     $e | Add-Member -NotePropertyName file -NotePropertyValue $row.File -Force
     $e | Add-Member -NotePropertyName status -NotePropertyValue 'downloaded' -Force
     if ($row.CoverPath) { $e | Add-Member -NotePropertyName cover -NotePropertyValue $row.CoverPath -Force }
@@ -631,10 +636,17 @@ $listenBlock.Margin = New-Object System.Windows.Thickness(18, 3, 0, 0)
 $top.Children.Add($listenBlock) | Out-Null
 
 $refreshBtn = New-Object System.Windows.Controls.Button
-$refreshBtn.Content = '刷新'
+$refreshBtn.Content = '同步'
+$refreshBtn.ToolTip = '只重新读取 work\library.json，合并新条目；不重置列表、不重新下载'
 $refreshBtn.Margin = New-Object System.Windows.Thickness(18, 0, 0, 0)
 $refreshBtn.Padding = New-Object System.Windows.Thickness(12, 4, 12, 4)
-$refreshBtn.Add_Click({ Load-Rows; Update-Count })
+$refreshBtn.Add_Click({
+  $script:LibraryStamp = [DateTime]::MinValue
+  Update-PlayerNow
+  Sync-Library
+  Update-Count
+  Write-GuiLog 'manual-sync'
+})
 $top.Children.Add($refreshBtn) | Out-Null
 
 $openBtn = New-Object System.Windows.Controls.Button
@@ -917,9 +929,13 @@ function Start-AutoDownload {
   if ($script:Jobs.Count -gt 0) { return }
   $r = @($rows | Where-Object {
       $_.Source -eq 'player' -and -not $_.File -and $_.Url -and -not $_.Pending -and
+      -not $script:AutoAttempted.ContainsKey($_.Id) -and
       $_.StatusText -notin @('匹配中…', '下载中…', '校验中…', '下载完成', '已下载', '下载失败', '打开')
     } | Select-Object -First 1)
-  if ($r.Count -gt 0) { Invoke-RowAction $r[0] -Auto }
+  if ($r.Count -gt 0) {
+    $script:AutoAttempted[$r[0].Id] = $true
+    Invoke-RowAction $r[0] -Auto
+  }
 }
 
 function Check-Pending {

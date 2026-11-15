@@ -499,15 +499,23 @@ function Update-LibraryEntry([hashtable]$Fields) {
   $id = [string]$Fields.id
   if (-not $id) { return }
   $e = if ($script:Library.ContainsKey($id)) { $script:Library[$id] } else { [pscustomobject]@{} }
+  $keepIfEmpty = @('cover', 'title', 'duration', 'url')
   foreach ($k in $Fields.Keys) {
-    $e | Add-Member -NotePropertyName ([string]$k) -NotePropertyValue $Fields[$k] -Force
+    $key = [string]$k
+    $value = $Fields[$k]
+    if ($keepIfEmpty -contains $key -and [string]::IsNullOrWhiteSpace([string]$value)) {
+      $oldProp = $e.PSObject.Properties[$key]
+      if ($oldProp -and -not [string]::IsNullOrWhiteSpace([string]$oldProp.Value)) { continue }
+    }
+    $e | Add-Member -NotePropertyName $key -NotePropertyValue $value -Force
   }
   $e | Add-Member -NotePropertyName updated -NotePropertyValue ((Get-Date).ToString('o')) -Force
   $script:Library[$id] = $e
   Save-Library
 }
 
-function Save-CardCover($card, [string]$id) {  try {
+function Save-CardCover($card, [string]$id) {
+  try {
     $dir = Join-Path $PSScriptRoot 'work\covers'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $safe = ($id -replace '[^0-9A-Za-z_-]', '')
