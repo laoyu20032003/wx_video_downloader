@@ -641,7 +641,7 @@ $script:autoLibraryAt = @{}
 function Update-PlayedLibrary($card, $playerInfo) {
   # 卡片页由悬停绑定精确写入；这里只负责播放窗口里“点开/播放过”的视频
   if ($card) { return }
-  $cands = @(Get-MediaCandidates 8)
+  $cands = @(Get-MediaCandidates 20)
   if ($cands.Count -eq 0) { return }
   $now = Get-Date
   foreach ($c in $cands) {
@@ -658,6 +658,7 @@ function Update-PlayedLibrary($card, $playerInfo) {
           id = $id; title = $playerInfo.Description; duration = $playerInfo.Duration
           url = $c.Url; cover = (Save-PlayerCover $playerInfo $id)
         }
+        Start-HeaderDump $id
         Write-HudLog ("library-promote id=$id")
       }
       continue
@@ -683,7 +684,7 @@ function Update-PlayedLibrary($card, $playerInfo) {
       id = $id; title = $title; duration = $dur; url = $c.Url; cover = $cover
       size = $size; width = 0; height = 0; status = $status
     }
-    Start-HeaderDump $id
+    if ($isFirst) { Start-HeaderDump $id }
     Write-HudLog ("library-auto id=$id card=$([bool]$card) player=$([bool]$playerInfo) size=$size")
   }
 }
