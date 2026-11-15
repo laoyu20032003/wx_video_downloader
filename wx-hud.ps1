@@ -52,6 +52,7 @@ Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
+Add-Type -AssemblyName System.Drawing
 
 Add-Type @'
 using System;
@@ -455,6 +456,83 @@ function Shorten([string]$s, [int]$n) {
   return $s.Substring(0, $n) + '…'
 }
 
+$script:LibraryFile = Join-Path $PSScriptRoot 'work\library.json'
+$script:Library = @{}
+
+function Load-Library {
+  $script:Library = @{}
+  if (-not (Test-Path -LiteralPath $script:LibraryFile)) { return }
+  try {
+    $j = Get-Content -LiteralPath $script:LibraryFile -Raw | ConvertFrom-Json
+    foreach ($e in @($j.entries)) {
+      if ($e -and $e.id) { $script:Library[[string]$e.id] = $e }
+    }
+  } catch { }
+}
+
+function Save-Library {
+  try {
+    $dir = Split-Path -Parent $script:LibraryFile
+    if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $tmp = $script:LibraryFile + '.tmp'
+    [pscustomobject]@{
+      updated = (Get-Date).ToString('o')
+      entries = @($script:Library.Values)
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tmp -Encoding utf8
+    Move-Item -LiteralPath $tmp -Destination $script:LibraryFile -Force
+  } catch { }
+}
+
+function Update-LibraryEntry([hashtable]$Fields) {
+  $id = [string]$Fields.id
+  if (-not $id) { return }
+  $e = if ($script:Library.ContainsKey($id)) { $script:Library[$id] } else { [pscustomobject]@{} }
+  foreach ($k in $Fields.Keys) {
+    $e | Add-Member -NotePropertyName ([string]$k) -NotePropertyValue $Fields[$k] -Force
+  }
+  $e | Add-Member -NotePropertyName updated -NotePropertyValue ((Get-Date).ToString('o')) -Force
+  $script:Library[$id] = $e
+  Save-Library
+}
+
+function Save-CardCover($card, [string]$id) {
+  try {
+    $dir = Join-Path $PSScriptRoot 'work\covers'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $safe = ($id -replace '[^0-9A-Za-z_-]', '')
+    $path = Join-Path $dir ($safe + '.png')
+    if (Test-Path -LiteralPath $path) { return $path }
+    $r = $card.Cover
+    $x = [int]$r.X; $y = [int]$r.Y; $w = [int]$r.Width; $h = [int]$r.Height
+    if ($w -le 0 -or $h -le 0) { return $null }
+    $bmp = New-Object System.Drawing.Bitmap($w, $h)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($x, $y, 0, 0, $bmp.Size)
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $g.Dispose(); $bmp.Dispose()
+    return $path
+  } catch { return $null }
+}
+
+function Get-MediaSize([string]$url) {
+  try {
+    $text = (& curl.exe -s -I --max-time 4 $url 2>$null | Out-String)
+    if ($text -match 'Content-Length:\s*(\d+)') { return [long]$matches[1] }
+  } catch { }
+  return [long]0
+}
+
+function Get-VideoInfo([string]$file) {
+  try {
+    $json = & ffprobe -v error -select_streams v:0 -show_entries stream=width,height -show_entries format=size -of json $file 2>$null | Out-String
+    $j = $json | ConvertFrom-Json
+    $s = @($j.streams)[0]
+    return [pscustomobject]@{
+      width = [int]$s.width; height = [int]$s.height; size = [long]$j.format.size
+    }
+  } catch { return $null }
+}
+
 function Start-Save {
   if ($script:saving) { Set-Notice "正在保存上一条，请稍候" 2; return }
   $pt = New-Object HudNative+POINT
@@ -517,6 +595,7 @@ function Start-CandidateSave {
   }
   $m = $script:saveCandidates[$script:saveCursor]
   $script:saveMedia = $m
+  Update-LibraryEntry @{ id = $m.M; status = 'downloading' }
   Remove-Item -LiteralPath $script:saveOut, $script:saveErr -ErrorAction SilentlyContinue
   try {
     $script:saveProc = Start-Process -FilePath 'pwsh.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
@@ -552,6 +631,16 @@ function Poll-Save {
     }
     $script:index[$script:saveKey] = $entry
     Save-Index
+    $info = Get-VideoInfo $saved
+    $lib = @{ id = $script:saveMedia.M; file = $saved; status = 'downloaded' }
+    if ($script:saveDesc) { $lib.title = $script:saveDesc }
+    if ($script:saveDur) { $lib.duration = $script:saveDur }
+    if ($info) {
+      $lib.size = [long]$info.size
+      $lib.width = [int]$info.width
+      $lib.height = [int]$info.height
+    }
+    Update-LibraryEntry $lib
     Write-HudLog ("save-ok file=$saved m=$($script:saveMedia.M)")
     Set-Notice ("✓ 已保存 " + (Split-Path $saved -Leaf)) 6
     $script:saving = $false
@@ -565,6 +654,7 @@ function Poll-Save {
     Start-CandidateSave
     return
   }
+  Update-LibraryEntry @{ id = $script:saveMedia.M; status = 'needs-replay' }
   Set-Notice "保存失败，见 work\hud_save_err.txt" 6
   $script:saving = $false
   $script:saveProc = $null
@@ -609,6 +699,7 @@ if ($Diagnose) {
 # ---------------- HUD ----------------
 Refresh-Index
 Load-Index
+Load-Library
 # 只从启动之后新增的 flows 行里取“当前播放”，避免把历史 URL 当成正在播放
 if (Test-Path -LiteralPath $FlowsFile) { $script:flowOffset = [long](Get-Item -LiteralPath $FlowsFile).Length }
 
@@ -903,6 +994,29 @@ function Update-Hud {
             M = $hits[0].M; Url = $hits[0].Url; Time = Get-Date
           }
           Write-HudLog ("bind card=$ckey m=$($hits[0].M)")
+
+          # 记录到视频库：封面截图 + 标题/时长/URL/大小/分辨率/状态
+          $coverPath = Save-CardCover $hitCard $hits[0].M
+          $size = Get-MediaSize $hits[0].Url
+          $idx = Get-IndexedEntry $hitCard $null
+          $status = if ($idx) { 'downloaded' } elseif ($size -gt 0) { 'available' } else { 'needs-replay' }
+          $info = if ($idx -and (Test-Path -LiteralPath $idx.file)) { Get-VideoInfo $idx.file } else { $null }
+          $finalSize = 0; $fw = 0; $fh = 0
+          if ($info) { $finalSize = [long]$info.size; $fw = [int]$info.width; $fh = [int]$info.height }
+          elseif ($size -gt 0) { $finalSize = [long]$size }
+          $fields = @{
+            id = $hits[0].M
+            title = $hitCard.Description
+            duration = $hitCard.Duration
+            url = $hits[0].Url
+            cover = $coverPath
+            size = $finalSize
+            width = $fw
+            height = $fh
+            status = $status
+          }
+          if ($idx -and $idx.file) { $fields.file = $idx.file }
+          Update-LibraryEntry $fields
         }
       }
     }
