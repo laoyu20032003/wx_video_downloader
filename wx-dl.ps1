@@ -1,4 +1,4 @@
-<#
+﻿<#
   wx-dl.ps1 —— 微信视频号（4.2 liteapp）一键下载/修复工具
 
   用法：
@@ -286,6 +286,7 @@ function Test-Mp4Layout {
   $declaredEnd = [long]0
   $firstType = ''
   $moovSeen = $false
+  $mdatSeen = $false
   $guard = 0
   while ($pos -lt $size -and $guard -lt 64) {
     $guard++
@@ -313,14 +314,15 @@ function Test-Mp4Layout {
     $pos += $sz
     # mdat 就是媒体数据本身，读完它就到头了；再往后是填充或垃圾，
     # 继续走会把声明长度算成一个荒唐的数（实测能"读"出 3.9GB）
-    if ($ty -eq 'mdat') { break }
+    if ($ty -eq 'mdat') { $mdatSeen = $true; break }
   }
 
   if ($firstType -ne 'ftyp') { return [pscustomobject]@{ Ok = $false; Reason = "头不是以 ftyp 开头（读到 '$firstType'）" } }
   if (-not $moovSeen) { return [pscustomobject]@{ Ok = $false; Reason = '头里没有 moov' } }
+  if (-not $mdatSeen) { return [pscustomobject]@{ Ok = $false; Reason = '头里没有 mdat' } }
   if ($declaredEnd -le 0) { return [pscustomobject]@{ Ok = $false; Reason = 'box 结构读不出来' } }
   $diff = $declaredEnd - $size
-  $tol = [Math]::Max([long]65536, [long]($size * 0.005))
+  $tol = [Math]::Max([long]1024, [long]($size * 0.0002))
   if ([Math]::Abs($diff) -gt $tol) {
     return [pscustomobject]@{ Ok = $false; Reason = ("头声明总长 {0:N0}，密文 {1:N0}，差 {2:N0}（这是别的视频的头）" -f $declaredEnd, $size, $diff) }
   }
@@ -435,7 +437,7 @@ function Test-UrlHeaderPreflight([string]$url, [int]$enclen, [long]$total) {
           }
         } elseif ($info.DeclaredValid -and $info.Declared -gt 0 -and $total -gt 0) {
           $probeable++
-          $tol = [Math]::Max([long]64, [long]($total * 0.001))
+          $tol = [Math]::Max([long]1024, [long]($total * 0.0002))
           if ([Math]::Abs($info.Declared - $total) -le $tol) {
             return [pscustomobject]@{ Status = 'match'; Declared = $info.Declared }
           }
