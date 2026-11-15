@@ -495,8 +495,33 @@ function Update-LibraryEntry([hashtable]$Fields) {
   Save-Library
 }
 
-function Save-CardCover($card, [string]$id) {
+$script:headerDumpAt = @{}
+
+function Start-HeaderDump([string]$id) {
   try {
+    $safe = ($id -replace '[^0-9A-Za-z_-]', '')
+    if (-not $safe) { return }
+    $dir = Join-Path $PSScriptRoot "work\headers\$safe"
+    if (Test-Path -LiteralPath $dir) {
+      $existing = @(Get-ChildItem -LiteralPath $dir -Filter '*.bin' -ErrorAction SilentlyContinue)
+      if ($existing.Count -gt 0) { return }
+    }
+    $now = Get-Date
+    if ($script:headerDumpAt.ContainsKey($safe) -and ($now - $script:headerDumpAt[$safe]).TotalSeconds -lt 20) { return }
+    $script:headerDumpAt[$safe] = $now
+    $exe = (Get-Process -Id $PID).Path
+    if (-not $exe) { $exe = 'pwsh' }
+    $dl = Join-Path $PSScriptRoot 'wx-dl.ps1'
+    if (-not (Test-Path -LiteralPath $dl)) { return }
+    Start-Process -FilePath $exe -WindowStyle Hidden -ArgumentList @(
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $dl,
+      '-DumpHeaders', '-HeaderTag', $safe
+    ) | Out-Null
+    Write-HudLog ("header-dump start id=$safe")
+  } catch { }
+}
+
+function Save-CardCover($card, [string]$id) {  try {
     $dir = Join-Path $PSScriptRoot 'work\covers'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $safe = ($id -replace '[^0-9A-Za-z_-]', '')
@@ -1017,6 +1042,7 @@ function Update-Hud {
           }
           if ($idx -and $idx.file) { $fields.file = $idx.file }
           Update-LibraryEntry $fields
+          Start-HeaderDump $hits[0].M
         }
       }
     }
