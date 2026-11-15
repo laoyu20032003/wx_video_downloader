@@ -27,7 +27,8 @@ param(
   [switch]$NoAuto,
   [switch]$Hud,
   [string]$SaveUrl = "",
-  [string]$SaveTag = ""
+  [string]$SaveTag = "",
+  [switch]$NoPreflight
 )
 
 $ErrorActionPreference = 'Stop'
@@ -322,11 +323,139 @@ function Get-RealDecodeErrors([string]$path) {
   return @($lines | Where-Object { $_ -and ($_ -notmatch $script:BenignDecodeMsg) }).Count
 }
 
+function Get-UrlHead([string]$url) {
+  $enclen = 131072
+  $total = [long]0
+  $code = 0
+  try {
+    $text = (& $Curl -s -I -m 30 --noproxy '*' -H 'Referer: https://liteapp.weixin.qq.com/' `
+      -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' $url 2>$null | Out-String)
+    if ($text -match 'HTTP/\S+\s+(\d+)') { $code = [int]$matches[1] }
+    if ($text -match 'X-enclen:\s*(\d+)') { $enclen = [int]$matches[1] }
+    if ($text -match 'Content-Length:\s*(\d+)') { $total = [long]$matches[1] }
+  } catch { }
+  if ($enclen -lt 1024 -or $enclen -gt 4194304) { $enclen = 131072 }
+  return [pscustomobject]@{ Code = $code; Enclen = $enclen; Total = $total }
+}
+
+function Get-HeaderInfo([byte[]]$header) {
+  $pos = [long]0
+  $moovEnd = [long]0
+  $declared = [long]0
+  $declaredValid = $false
+  $seenMoov = $false
+  for ($i = 0; $i -lt 12; $i++) {
+    if ($pos + 8 -gt $header.Length) { break }
+    $sz = Read-BE32 $header ([int]$pos)
+    $type = [System.Text.Encoding]::ASCII.GetString($header, [int]$pos + 4, 4)
+    if ($sz -eq 1) {
+      if ($pos + 16 -gt $header.Length) { break }
+      $sz = ([long](Read-BE32 $header ([int]$pos + 8))) * 4294967296L + (Read-BE32 $header ([int]$pos + 12))
+    } elseif ($sz -eq 0) {
+      $sz = 0
+    }
+    if ($type -eq 'moov' -and $sz -ge 8) {
+      $moovEnd = $pos + $sz
+      $seenMoov = $true
+    }
+    if ($sz -lt 8) { break }
+    $pos += $sz
+    $declared = $pos
+    if ($type -eq 'mdat') {
+      $declaredValid = $true
+      break
+    }
+  }
+  return [pscustomobject]@{ MoovEnd = $moovEnd; Declared = $declared; DeclaredValid = $declaredValid; SeenMoov = $seenMoov }
+}
+
+function Test-UrlHeaderPair([string]$url, [long]$offset) {
+  $tmp = Join-Path $Work 'probe16.bin'
+  try {
+    $code = & $Curl -s -m 20 --noproxy '*' --max-filesize 4096 -r "$offset-$($offset + 15)" -o $tmp -w '%{http_code}' `
+      -H 'Referer: https://liteapp.weixin.qq.com/' `
+      -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' $url 2>$null
+    $code = "$code".Trim()
+    if ($code -ne '206') { return $false }
+    $bytes = [System.IO.File]::ReadAllBytes($tmp)
+    if ($bytes.Length -ne 16) { return $false }
+    $sz = Read-BE32 $bytes 0
+    $type = [System.Text.Encoding]::ASCII.GetString($bytes, 4, 4)
+    if ($sz -lt 8) { return $false }
+    return (@('free', 'mdat', 'wide', 'skip', 'uuid') -contains $type)
+  } catch { return $false }
+  finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
+}
+
+function Test-UrlHeaderPreflight([string]$url, [int]$enclen, [long]$total) {
+  $procs = Get-CimInstance Win32_Process -Filter "Name='WeChatAppEx.exe'" |
+    Where-Object { $_.WorkingSetSize -gt 60MB } | Sort-Object WorkingSetSize -Descending
+  if (-not $procs) { return [pscustomobject]@{ Status = 'noheaders'; Reason = '没有 WeChatAppEx 进程' } }
+
+  $tmp = Join-Path $Work 'preflight_header.bin'
+  $seen = @{}
+  $probeable = 0
+  try {
+    foreach ($p in $procs) {
+      foreach ($a in [MemScan]::Scan([int]$p.ProcessId, 20)) {
+        if ($a -lt 0) { continue }
+        if (-not [MemScan]::Dump([int]$p.ProcessId, [long]$a, 131072, $tmp)) { continue }
+        $h = [System.IO.File]::ReadAllBytes($tmp)
+        if ($h.Length -lt 4096) { continue }
+        $key = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash($h))
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = 1
+        $info = Get-HeaderInfo $h
+        if ($info.MoovEnd -le 0) { continue }
+
+        if ($info.MoovEnd -ge $enclen) {
+          $probeable++
+          if (Test-UrlHeaderPair $url $info.MoovEnd) {
+            return [pscustomobject]@{ Status = 'match'; MoovEnd = $info.MoovEnd }
+          }
+        } elseif ($info.DeclaredValid -and $info.Declared -gt 0 -and $total -gt 0) {
+          $probeable++
+          $tol = [Math]::Max([long]64, [long]($total * 0.001))
+          if ([Math]::Abs($info.Declared - $total) -le $tol) {
+            return [pscustomobject]@{ Status = 'match'; Declared = $info.Declared }
+          }
+        }
+      }
+    }
+  } catch { }
+  finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
+
+  if ($probeable -eq 0) { return [pscustomobject]@{ Status = 'skip'; Reason = '没有可探测的头' } }
+  return [pscustomobject]@{ Status = 'mismatch'; Reason = '地址与所有内存头都不配对' }
+}
+
 function Invoke-Fix([string]$url, [string]$tag) {
   $cipher = Join-Path $Work "cipher_$tag.bin"
   $candidate = Join-Path $Work "cand_$tag.mp4"
   $prefix = Join-Path $Work "prefix_$tag.bin"
   $errFile = Join-Path $Work 'err.txt'
+
+  $head = Get-UrlHead $url
+  if ($head.Code -eq 403 -or $head.Code -eq 401) {
+    Write-Host "  地址已过期（HTTP $($head.Code)），请在微信里重新播放这条视频" -ForegroundColor Red
+    return $null
+  }
+  $enclen = $head.Enclen
+  if (-not $NoPreflight -and ($head.Code -eq 200 -or $head.Code -eq 206)) {
+    Write-Step "Range 预检：地址与内存头配对 ..."
+    $pre = Test-UrlHeaderPreflight $url $enclen $head.Total
+    if ($pre.Status -eq 'mismatch') {
+      Write-Host "  预检失败：$($pre.Reason)，不下载密文（避免下错整条）" -ForegroundColor Red
+      return $null
+    }
+    if ($pre.Status -eq 'noheaders') {
+      Write-Host "  预检失败：$($pre.Reason)，请先播放这条视频" -ForegroundColor Red
+      return $null
+    }
+    if ($pre.Status -eq 'match') {
+      Write-Step "预检命中：文件头与此地址结构一致"
+    }
+  }
 
   Write-Step "下载密文 ..."
   $code = & $Curl -s -m 900 --noproxy '*' -o $cipher -w "%{http_code}" $url
@@ -347,12 +476,8 @@ function Invoke-Fix([string]$url, [string]$tag) {
     return $null
   }
 
-  $enclen = 131072
-  foreach ($line in (& $Curl -s -I -m 30 --noproxy '*' $url)) {
-    if ($line -match 'X-enclen:\s*(\d+)') { $enclen = [int]$matches[1] }
-  }
-  # 带 Range 的请求会把 X-enclen 回成「本次范围长度」（实测 bytes=0-1 就回 2），
-  # 这种值拿来当偏移会把密文切错位置，宁可回退默认值
+  # 带 Range 的请求会把 X-enclen 回成「本次范围长度」，这里用 HEAD 拿到的值，
+  # 并限定在合理范围内
   if ($enclen -lt 1024 -or $enclen -gt 4194304) { $enclen = 131072 }
 
   $len = (Get-Item -LiteralPath $cipher).Length
