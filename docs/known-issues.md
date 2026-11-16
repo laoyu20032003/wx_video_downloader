@@ -1,4 +1,4 @@
-# 已知问题与解决方案
+﻿# 已知问题与解决方案
 
 更新：2026-11-16  
 适用：微信 4.2.x Windows / WeChatAppEx / PowerShell 7（HUD 也兼容 5.1）  
@@ -415,6 +415,79 @@ Windows/微信显示的是首帧，不是文件内指定封面。
 
 ---
 
+## 13.1 wx-viewer：扫描时没有主窗口 / 卡在 pending
+
+### 现象
+
+双击 `wx-viewer.vbs` 后，微信页面自动滚动，但 viewer 主窗口半天不出现。
+
+### 原因
+
+`start_scan()` 会先 `withdraw()` 主窗口，避免遮住视频号卡片，保证封面截图正确；扫描还要依次做：
+
+```text
+UIA 全量滚屏
+renderer 堆扫描
+主进程完整 URL 扫描
+resolve 绑定
+```
+
+旧版没有进度窗口，看上去像没启动。
+
+### 处理
+
+- 现在扫描时显示左上角「视频号扫描」小窗，实时显示页数/阶段；
+- 扫描完成或失败后自动关闭小窗并恢复主窗口；
+- 10 分钟内的 `mem_model2.json` / `main_pairs.json` 会复用，避免每次重扫 2–3 分钟；
+- 如果主窗口仍不出现，检查 `viewer/work/viewer.log` 最后一行停在哪个阶段。
+
+### pending 点击后仍失败
+
+`pending` 行点击会：
+
+```text
+定位卡片 → hover 8 秒 → 重扫 renderer → 重扫主进程 → resolve → 下载
+```
+
+仍然失败通常是：
+
+- 该卡片没有被微信加载/悬停到；
+- renderer 里没有该 `index/oid`；
+- 主进程还没有这条 `oid ↔ 完整 URL`；
+- URL 缺 `sign/basedata`，或已过期（HEAD 400）；
+- 明文头被挤出内存（需要重新 hover 8 秒）。
+
+处理：刷新列表、重新 hover 该卡 8 秒，再点下载；不要连续快速切换很多卡。
+
+### 日志
+
+```text
+viewer/work/viewer.log
+viewer/work/resolved_cards.json
+viewer/work/main_pairs.json
+viewer/work/mem_model2.json
+```
+
+### 单任务限制
+
+viewer 同一时间只允许一个下载任务。原因不是网络，而是：
+
+- 只有一个鼠标 hover 位置；
+- 只有一套微信滚动/UIA 网格状态；
+- renderer/主进程扫描是全局的；
+- 明文头是有限缓存，新头会把旧头挤掉。
+
+要做并发，必须拆成「串行激活/取头」+「并行下载」。
+
+### 保存时 console 闪窗
+
+`wx-viewer` 用 `pythonw` 启动，子进程 `pwsh.exe`/`curl.exe` 默认会新建 console，`ffmpeg` 继承后看到窗口。已在 viewer 内使用：
+
+```python
+CREATE_NO_WINDOW + STARTF_USESHOWWINDOW + SW_HIDE
+```
+
+覆盖 `pwsh`、`curl`、`resolve`；`ffmpeg` 是其子进程，不再单独弹窗。
 ## 14. 目前无法可靠解决的问题
 
 1. **腾讯服务端限流**  
