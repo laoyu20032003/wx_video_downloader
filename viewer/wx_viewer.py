@@ -81,6 +81,25 @@ def clean_text(s):
         return ""
 
 
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+def run_hidden(args, **kwargs):
+    """Run a console child without flashing a console window.
+
+    The viewer is pythonw.exe, so a plain subprocess.run(pwsh/ffmpeg...)
+    creates a new console for the child.  That is the window seen when
+    the final file is saved.
+    """
+    kwargs.setdefault("creationflags", CREATE_NO_WINDOW)
+    if os.name == "nt":
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        kwargs.setdefault("startupinfo", si)
+    return subprocess.run(args, **kwargs)
+
+
 def fresh(path, seconds):
     try:
         return os.path.exists(path) and (time.time() - os.path.getmtime(path)) < seconds
@@ -96,7 +115,7 @@ def collect_render_models():
 
 
 def run_resolve():
-    subprocess.run(
+    run_hidden(
         [sys.executable.replace("pythonw.exe", "python.exe"),
          os.path.join(HERE, "resolve.py")],
         capture_output=True, timeout=120)
@@ -230,7 +249,7 @@ class DownloadWorker(threading.Thread):
         url = clean_text(url)
         tag = "".join(ch for ch in clean_text(oid) if ch.isalnum()) or "slot"
         try:
-            code = subprocess.run(
+            code = run_hidden(
                 ["curl.exe", "-s", "-o", "NUL", "--noproxy", "*", "-m", "12",
                  "-I", "-H", "Referer: https://liteapp.weixin.qq.com/",
                  "-A", "Mozilla/5.0", "-w", "%{http_code}", url],
@@ -249,7 +268,7 @@ class DownloadWorker(threading.Thread):
         if sec > 0:
             args += ["-ExpectedDuration", str(sec)]
         try:
-            p = subprocess.run(args, capture_output=True, text=True,
+            p = run_hidden(args, capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=600)
             out = (p.stdout or "") + "\n" + (p.stderr or "")
             for line in out.splitlines():
