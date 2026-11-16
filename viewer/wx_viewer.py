@@ -95,6 +95,27 @@ class ScanWorker(threading.Thread):
             def on_step(step, snap):
                 self.q.put(("step", step, snap))
             snap = c.run(on_step)
+
+            # 跨层绑定：renderer 记录（oid/index/时长/点赞） + 主进程完整 URL
+            self.q.put(("status", "扫描 renderer 模型…"))
+            try:
+                subprocess.run(
+                    [sys.executable, os.path.join(HERE, "mem_render.py"),
+                     "--out", os.path.join(WORK, "mem_model2.json")],
+                    capture_output=True, timeout=120)
+                self.q.put(("status", "扫描主进程完整 URL…"))
+                pid, rows = main_pairs.scan()
+                with open(os.path.join(WORK, "main_pairs.json"), "w", encoding="utf-8") as f:
+                    json.dump({"pid": pid, "rows": rows}, f, ensure_ascii=False)
+                self.q.put(("status", "按 oid/序号/时长/点赞绑定…"))
+                subprocess.run(
+                    [sys.executable, os.path.join(HERE, "resolve.py")],
+                    capture_output=True, timeout=120)
+                with open(os.path.join(WORK, "resolved_cards.json"), encoding="utf-8") as f:
+                    snap["resolved"] = json.load(f)
+            except Exception as e:
+                snap["resolve_error"] = str(e)
+
             self.q.put(("done", snap))
         except Exception as e:
             self.q.put(("error", str(e)))
@@ -124,6 +145,32 @@ class ActivateWorker(threading.Thread):
         c = None
         try:
             key = self.row.get("key")
+            url0 = clean_text(self.row.get("url") or "")
+            if not complete_url(url0):
+                self.q.put(("error", "这张卡没有绑定完整 URL；请先 hover 8 秒后刷新解析"))
+                return
+
+            # 豆包新结论：hover 8 秒即可让预览解码，明文头常驻，不必点开播放器。
+            self.q.put(("status", "定位卡片…"))
+            c = scanmod.Collector(OUT_JSON, scroll=True)
+            c._init_uia()
+            c._pick_profile()
+            card = c.find_card(key)
+            if not card:
+                self.q.put(("error", "当前 UIA 网格里找不到这张卡"))
+                return
+            self.q.put(("status", "hover 8 秒取明文头…"))
+            c.hover(card, seconds=8.0)
+            self.q.put(("bound", {"object_id": self.row.get("object_id"), "url": url0,
+                                  "invoke": False, "meta": None}))
+            self.q.put(("status", "下载中（wx-dl）…"))
+            saved, reason = self._download(url0, self.row.get("object_id") or "slot", self.row)
+            if saved:
+                self.q.put(("saved", {"file": saved,
+                                      "object_id": self.row.get("object_id"), "url": url0}))
+            else:
+                self.q.put(("failed", reason))
+            return
             # 如果这条 slot 已经绑定过 object_id，先直接用主进程里的新 URL，
             # 不需要再定位/激活卡片。旧 URL 可能已经被截断或过期。
             if self.row.get("object_id"):
@@ -462,26 +509,36 @@ class App(tk.Tk):
     def on_scan_done(self, snap):
         self.deiconify()
         self.cards = snap.get("cards", [])
-        # 合并已下载/已绑定的状态
+        resolved = (snap.get("resolved") or {}).get("rows") or []
+        by_idx = {r.get("index"): r for r in resolved if r.get("index") is not None}
+        for c in self.cards:
+            r = by_idx.get(c.get("index"))
+            if r:
+                c["object_id"] = r.get("object_id")
+                c["nonce"] = r.get("nonce")
+                c["url"] = r.get("url") or ""
+                c["status"] = r.get("status") or "pending"
+                c["note"] = r.get("note") or ""
+                c["like_check"] = r.get("like_check")
+                c["pos_check"] = r.get("pos_check")
+            else:
+                c["status"] = "pending"
+        # 合并已下载文件状态；不要用旧库里的 stale URL/status 覆盖本次解析结果
         for c in self.cards:
             old = self.lib.get(c["key"], {})
-            for k in ("object_id", "url", "file", "status", "error"):
-                if old.get(k):
-                    c[k] = old[k]
+            if not c.get("object_id") and old.get("object_id"):
+                c["object_id"] = old["object_id"]
+            if old.get("file") and os.path.exists(old["file"]):
+                c["file"] = old["file"]
+                c["status"] = "done"
             if c.get("file") and os.path.exists(c["file"]):
                 c["status"] = "done"
-            elif c.get("url"):
-                c["status"] = c.get("status") or "ready"
-            else:
-                c["status"] = c.get("status") or "pending"
         self.account.configure(text="账号: " + (snap.get("account") or "-"))
         self.status.configure(
             text=f"完成 · {snap.get('discovered',0)} 张 · {snap.get('total_text','')}")
         self.render()
         self.scan_btn.configure(state="normal")
         self.dl_btn.configure(state="normal")
-        # 扫描完成后后台建立一次主进程配对基线；激活时只比较新增配对。
-        BaselineWorker(self.q).start()
 
     def render(self):
         self.tree.delete(*self.tree.get_children())

@@ -16,33 +16,43 @@ pythonw viewer\wx_viewer.py
 
 依赖：Python 3.14、comtypes、psutil、Pillow、tkinter、pwsh、ffmpeg/ffprobe。
 
-## 当前已工作
+## 已工作（跨层绑定版）
 
-- UIA 从顶部顺序翻页采集作者主页卡片；
-- 不按 163 截断，采到连续两页无新增；
-- 每张卡显示封面、时长、点赞、文案、状态；
-- 封面来自卡片可见时的屏幕截图，保存到 `viewer/work/covers_uia/`；
-- 扫描时 viewer 自动隐藏，避免遮住微信卡片；
-- 点击「下载选中」时：
-  1. 按 `duration|like|desc` 重新在当前 UIA 网格定位卡片；
-  2. 滚动到可见；
-  3. 先 hover，拿不到再 UIA Invoke；
-  4. 扫描主进程新增 `object_id ↔ 完整 URL`；
-  5. 唯一且时长匹配才交给 `wx-dl.ps1` 下载。
+- UIA 卡片：序号 / 时长 / 点赞 / 文案 / 封面；
+- `mem_render.py`：扫描 renderer 堆，得到 `oid / index / vid_len / like / 邻近 20302 URL`；
+- `main_pairs.py`：扫描主进程 `oid ↔ 完整签名 URL`；
+- `resolve.py`：按 **oid → index → 时长 → 点赞** 对齐，歧义拒绝；
+- 表格显示 `ready / pending`；ready 才允许下载；
+- 下载：
+  ```text
+  ready URL
+  → UIA 重新定位卡片
+  → hover 8 秒（豆包实测：预览解码即可常驻明文头）
+  → wx-dl 下载 + 明文头拼接
+  ```
 
-## 当前未完成/限制
+实测已成功落盘一条：
 
-- 扫描数量会浮动（实测 321 / 330 / 539），说明仍有虚拟列表/历史节点；
-- 主进程字节扫描较慢，激活后要等几秒；
-- hover 可能只预取加密流，没有明文头时 `wx-dl` 仍会失败；
-- 没有拿到 `object_id` 的卡片只能是 `pending`，不猜；
-- 封面是屏幕截图，不是原图；viewer 与微信不能重叠；
-- 图片动态/图文/直播回放不是普通视频，下载前应跳过；
-- 固定 slot 的全量顺序仍需按 `object_id` 校正。
+```text
+视频号_20261117_024143_576p_82s.mp4
+10,256,192 bytes
+duration 82.33s
+```
+
+## 限制
+
+- renderer/主进程记录只覆盖当前会话/已加载卡片；未命中的卡片是 pending；
+- hover 8 秒是必要条件，下载前不能刷新页面/切换太远；
+- 明文头是有限缓存，新头会挤掉旧头；
+- 窗口缩放后仍按 `uia_key` 重新定位，不依赖旧 rect；
+- 图片/图文/直播回放不是普通视频。
 
 ## 文件
 
-- `wx_viewer.py`：Tkinter UI/扫描/激活/下载编排
-- `uia_scan.py`：UIA 卡片读取、滚动、封面、定位、hover/Invoke
-- `main_pairs.py`：Weixin.exe 主进程 `object_id ↔ URL` 扫描
+- `wx_viewer.py`：Tkinter UI/扫描/下载编排
+- `uia_scan.py`：UIA 卡片读取、滚动、封面、定位、hover
+- `main_pairs.py`：主进程 `object_id ↔ URL`
+- `mem_render.py`：renderer 堆模型（oid/index/时长/点赞）
+- `resolve.py`：跨层绑定解析
 - `../wx-viewer.vbs`：无控制台启动器
+
