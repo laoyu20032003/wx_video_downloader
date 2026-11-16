@@ -1,4 +1,6 @@
-> **来源与状态**
+﻿> **来源与状态**
+
+> **DeepSeek Harness** · 文档整理与验证
 >
 > 本文导入自豆包的本地调研记录（原文件 `D:\Doubao\wx_video_downloader\docs\association-research.md`），保留当时的时间、PID、工具路径和失败方向，作为“为什么这样设计”的原始证据。
 >

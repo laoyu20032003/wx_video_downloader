@@ -1,4 +1,6 @@
-# wx-viewer（本项目版本）
+﻿# wx-viewer（本项目版本）
+
+> **DeepSeek Harness** · 文档整理与验证
 
 独立的视频号卡片列表/封面/下载入口，不依赖 `wx-gui`、mitmproxy 或 HUD。
 

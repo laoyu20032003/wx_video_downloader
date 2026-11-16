@@ -1,4 +1,6 @@
-# Hover 诊断
+﻿# Hover 诊断
+
+> **DeepSeek Harness** · 文档整理与验证
 
 `tools/hover-diag.ps1` 不模拟鼠标、不改微信，只读取：
 

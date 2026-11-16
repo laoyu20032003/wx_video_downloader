@@ -1,4 +1,6 @@
-# 已知问题与解决方案
+﻿# 已知问题与解决方案
+
+> **DeepSeek Harness** · 文档整理与验证
 
 更新：2026-11-16  
 适用：微信 4.2.x Windows / WeChatAppEx / PowerShell 7（HUD 也兼容 5.1）  

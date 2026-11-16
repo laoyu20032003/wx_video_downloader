@@ -1,4 +1,6 @@
-# wx_video_downloader
+﻿# wx_video_downloader
+
+> **DeepSeek Harness** · 文档整理与验证
 
 微信视频号（WeChat Channels）视频下载工具，面向 **微信 PC 4.2.x**。
 
