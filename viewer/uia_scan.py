@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """UIA 滚动分页采集器（原型，可复制到 tools/uia-collect.py 的位置）。
 
 特点：
@@ -326,7 +326,98 @@ class Collector:
         except Exception:
             return False
 
-    def find_card(self, key, tries=18):
+    def _card_from_box(self, box):
+        try:
+            r = box.CurrentBoundingRectangle
+            if r.right - r.left < 80 or r.bottom - r.top < 120:
+                return None
+            texts = []
+            cover = (r.left, r.top, r.right, r.bottom)
+            kids = box.FindAll(U.TreeScope_Descendants, self.auto.CreateTrueCondition())
+            for j in range(kids.Length):
+                ch = kids.GetElement(j)
+                try:
+                    ct = ch.CurrentControlType
+                    name = ch.CurrentName or ""
+                    if ct == U.UIA_ImageControlTypeId and name == "封面":
+                        cr = ch.CurrentBoundingRectangle
+                        cover = (cr.left, cr.top, cr.right, cr.bottom)
+                        continue
+                    if ct == U.UIA_TextControlTypeId and name:
+                        texts.append(name)
+                except Exception:
+                    continue
+            dur = like = desc = ""
+            for tx in texts:
+                if DUR_RE.match(tx):
+                    dur = tx
+                elif LIKE_RE.match(tx) and not like:
+                    like = tx
+                elif len(tx) > len(desc):
+                    desc = tx
+            if not dur:
+                return None
+            return {
+                "el": box,
+                "key": f"{dur}|{like}|{desc}",
+                "rect": [int(r.left), int(r.top), int(r.right), int(r.bottom)],
+                "cover": [int(cover[0]), int(cover[1]), int(cover[2]), int(cover[3])],
+                "duration": dur, "seconds": duration_seconds(dur),
+                "like": like, "like_int": parse_like(like), "desc": desc,
+            }
+        except Exception:
+            return None
+
+    def find_card(self, key, tries=8):
+        """Fast path: native UIA Name search, then climb to the click-box.
+
+        The old read_elements() path enumerates 2000+ cards and takes ~20s.
+        FindAll(Name=desc) is handled inside the UIA provider and takes <1s.
+        """
+        if self.profile is None:
+            self._init_uia()
+            self._pick_profile()
+        parts = key.split("|", 2)
+        desc = parts[2] if len(parts) >= 3 else ""
+        if desc:
+            for _ in range(tries):
+                try:
+                    cond = self.auto.CreatePropertyCondition(U.UIA_NamePropertyId, desc)
+                    hits = self.profile.FindAll(U.TreeScope_Descendants, cond)
+                except Exception:
+                    hits = None
+                cards = []
+                if hits is not None:
+                    for i in range(hits.Length):
+                        cur = hits.GetElement(i)
+                        for _up in range(6):
+                            try:
+                                if cur.CurrentClassName == "click-box":
+                                    card = self._card_from_box(cur)
+                                    if card:
+                                        cards.append(card)
+                                    break
+                                cur = self.walker.GetParentElement(cur)
+                            except Exception:
+                                break
+                # Deduplicate by key
+                cards = [c for c in cards if c["key"] == key]
+                if len(cards) == 1:
+                    card = cards[0]
+                    if self._visible(card["rect"]):
+                        return card
+                    try:
+                        pr = self.profile.CurrentBoundingRectangle
+                        self._wheel(False if card["rect"][1] < pr.top else True)
+                        time.sleep(0.4)
+                    except Exception:
+                        pass
+                    continue
+                if len(cards) > 1:
+                    return None
+                break
+        return self._find_card_full(key, tries=tries)
+    def _find_card_full(self, key, tries=18):
         """Re-resolve a slot key against the live UIA grid, scrolling if needed."""
         if self.profile is None:
             self._init_uia()

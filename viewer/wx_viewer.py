@@ -206,6 +206,8 @@ class App(tk.Tk):
         self.lib = load_lib()
         self.cards = []
         self.photos = []
+        self.page = 0
+        self.page_size = 20
         self.worker = None
         self.scanner = None
         self._build()
@@ -220,10 +222,16 @@ class App(tk.Tk):
         self.stop_btn = ttk.Button(bar, text="停止", command=self.stop)
         self.status = ttk.Label(bar, text="准备")
         self.account = ttk.Label(bar, text="账号: -")
+        self.prev_btn = ttk.Button(bar, text="上一页", command=self.prev_page)
+        self.next_btn = ttk.Button(bar, text="下一页", command=self.next_page)
+        self.page_label = ttk.Label(bar, text="1/1")
         self.scan_btn.pack(side="left")
         self.dl_btn.pack(side="left", padx=6)
         self.stop_btn.pack(side="left")
         self.account.pack(side="left", padx=12)
+        self.prev_btn.pack(side="left", padx=(8, 2))
+        self.page_label.pack(side="left")
+        self.next_btn.pack(side="left", padx=2)
         self.status.pack(side="left", padx=8)
 
         style = ttk.Style(self)
@@ -349,7 +357,13 @@ class App(tk.Tk):
     def render(self):
         self.tree.delete(*self.tree.get_children())
         self.photos = []
-        for i, c in enumerate(self.cards):
+        total = max(1, (len(self.cards) + self.page_size - 1) // self.page_size)
+        self.page = max(0, min(self.page, total - 1))
+        self.page_label.configure(text=f"{self.page + 1}/{total}")
+        start = self.page * self.page_size
+        subset = self.cards[start:start + self.page_size]
+        for off, c in enumerate(subset):
+            i = start + off
             photo = None
             p = c.get("cover_path") or ""
             if p and os.path.exists(p):
@@ -365,11 +379,22 @@ class App(tk.Tk):
                 i + 1, c.get("duration", ""), c.get("like", ""), st,
                 (c.get("desc") or "")[:110]))
 
+    def prev_page(self):
+        if self.page > 0:
+            self.page -= 1
+            self.render()
+
+    def next_page(self):
+        total = max(1, (len(self.cards) + self.page_size - 1) // self.page_size)
+        if self.page + 1 < total:
+            self.page += 1
+            self.render()
+
     def selected(self):
         items = self.tree.selection()
         if not items:
             return None
-        i = self.tree.index(items[0])
+        i = self.page * self.page_size + self.tree.index(items[0])
         return self.cards[i] if 0 <= i < len(self.cards) else None
 
     def download_selected(self):
