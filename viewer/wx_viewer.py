@@ -99,25 +99,22 @@ class ActivateWorker(threading.Thread):
                 self.q.put(("error", "当前 UIA 网格里找不到这张卡（可能文案/时长变了，或存在重复）"))
                 return
 
-            self.q.put(("status", "扫描激活前配对…"))
-            try:
-                _, before = main_pairs.scan()
-            except Exception:
-                before = []
-
-            # 先 hover，不打开播放器
-            self.q.put(("status", "hover 激活取流…"))
+            self.q.put(("status", "激活取流…"))
             c.hover(card, seconds=2.2)
-            time.sleep(1.0)
+            time.sleep(0.8)
+
+            # 不再做“激活前全量扫描”；激活后扫一次即可。
+            # 主进程全量扫描约 46s，做两次会让下载等两分钟。
+            self.q.put(("status", "扫描 object_id ↔ URL…"))
             try:
                 _, after = main_pairs.scan()
             except Exception:
                 after = []
-            new = main_pairs.delta(before, after)
 
-            # hover 没有新配对时，Invoke 打开播放器强制解码
+            # hover 没有可用配对时，Invoke 打开播放器再扫一次。
             used_invoke = False
-            if not [r for r in new if r["kind"] == "20302"]:
+            pair = self._choose(after, self.row)
+            if not pair:
                 self.q.put(("status", "Invoke 播放取流…"))
                 if c.invoke(card):
                     used_invoke = True
@@ -126,18 +123,16 @@ class ActivateWorker(threading.Thread):
                         _, after2 = main_pairs.scan()
                     except Exception:
                         after2 = after
-                    new = main_pairs.delta(before, after2)
+                    pair = self._choose(after2, self.row)
                     c.close_player()
                 else:
                     c.close_player()
 
-            self.q.put(("status", "匹配 object_id ↔ URL…"))
-            pair = self._choose(new, self.row)
             if not pair:
-                self.q.put(("error", "激活后没有唯一可信的 object_id↔URL；保持 pending"))
+                self.q.put(("error", "激活后没有可信的 object_id↔URL；保持 pending"))
                 return
 
-            url = pair["raw_url"]
+            url = clean_text(pair["raw_url"])
             oid = pair["object_id"]
             self.q.put(("bound", {"object_id": oid, "url": url,
                                   "invoke": used_invoke, "meta": pair.get("meta")}))
