@@ -24,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 WORK = os.path.join(HERE, "work")
 LIB = os.path.join(WORK, "library.json")
+BASELINE = os.path.join(WORK, "pairs_baseline.json")
 OUT_JSON = os.path.join(WORK, "uia_cards.json")
 OUT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "视频号")
 TOOL = os.path.join(ROOT, "wx-dl.ps1")
@@ -52,6 +53,25 @@ def complete_url(url):
     return bool(url and "sign=" in url and "basedata=" in url and "\x00" not in url)
 
 
+def load_baseline():
+    try:
+        with open(BASELINE, encoding="utf-8") as f:
+            d = json.load(f)
+        return {(str(x[0]), str(x[1])) for x in d if len(x) >= 2}
+    except Exception:
+        return set()
+
+
+def save_baseline(rows):
+    try:
+        os.makedirs(WORK, exist_ok=True)
+        data = [[r["object_id"], r["kind"]] for r in rows]
+        with open(BASELINE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
 def clean_text(s):
     try:
         s = str(s).split("\x00", 1)[0]
@@ -78,6 +98,20 @@ class ScanWorker(threading.Thread):
             self.q.put(("done", snap))
         except Exception as e:
             self.q.put(("error", str(e)))
+
+
+class BaselineWorker(threading.Thread):
+    def __init__(self, q):
+        super().__init__(daemon=True)
+        self.q = q
+
+    def run(self):
+        try:
+            _, rows = main_pairs.scan()
+            save_baseline(rows)
+            self.q.put(("baseline", len(rows)))
+        except Exception as e:
+            self.q.put(("baseline_error", str(e)))
 
 
 class ActivateWorker(threading.Thread):
@@ -131,6 +165,15 @@ class ActivateWorker(threading.Thread):
                     return
 
             self.q.put(("status", "定位卡片…"))
+            base = load_baseline()
+            if not base:
+                self.q.put(("status", "建立主进程配对基线…"))
+                try:
+                    _, b0 = main_pairs.scan()
+                    save_baseline(b0)
+                    base = {(str(r["object_id"]), str(r["kind"])) for r in b0}
+                except Exception:
+                    base = set()
             c = scanmod.Collector(OUT_JSON, scroll=True)
             c._init_uia()
             c._pick_profile()
@@ -153,7 +196,9 @@ class ActivateWorker(threading.Thread):
 
             # hover 没有可用配对时，Invoke 打开播放器再扫一次。
             used_invoke = False
-            pair = self._choose(after, self.row)
+            new = [r for r in after
+                   if (str(r.get("object_id")), str(r.get("kind"))) not in base]
+            pair = self._choose(new, self.row) or self._choose(after, self.row)
             if not pair:
                 self.q.put(("status", "Invoke 播放取流…"))
                 if c.invoke(card):
@@ -163,7 +208,9 @@ class ActivateWorker(threading.Thread):
                         _, after2 = main_pairs.scan()
                     except Exception:
                         after2 = after
-                    pair = self._choose(after2, self.row)
+                    new2 = [r for r in after2
+                            if (str(r.get("object_id")), str(r.get("kind"))) not in base]
+                    pair = self._choose(new2, self.row) or self._choose(after2, self.row)
                     c.close_player()
                 else:
                     c.close_player()
@@ -354,10 +401,20 @@ class App(tk.Tk):
                     self.on_scan_done(item[1])
                 elif kind == "error":
                     self.deiconify()
+                    row = self.selected()
+                    if row:
+                        row["status"] = "failed"
+                        row["error"] = item[1]
+                        self.lib[row["key"]] = row
+                        save_lib(self.lib)
                     self.status.configure(text="失败: " + item[1])
                     self.logline("ERROR " + item[1])
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
+                elif kind == "baseline":
+                    self.logline(f"主进程配对基线已建立: {item[1]}")
+                elif kind == "baseline_error":
+                    self.logline("主进程配对基线失败: " + item[1])
                 elif kind == "status":
                     self.status.configure(text=item[1])
                     self.logline(item[1])
@@ -423,6 +480,8 @@ class App(tk.Tk):
         self.render()
         self.scan_btn.configure(state="normal")
         self.dl_btn.configure(state="normal")
+        # 扫描完成后后台建立一次主进程配对基线；激活时只比较新增配对。
+        BaselineWorker(self.q).start()
 
     def render(self):
         self.tree.delete(*self.tree.get_children())
