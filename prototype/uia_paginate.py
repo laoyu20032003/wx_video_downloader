@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """UIA 滚动分页采集器（原型，可复制到 tools/uia-collect.py 的位置）。
 
 特点：
@@ -177,8 +177,14 @@ class Collector:
             pass
 
     # ---- card read -----------------------------------------------------
-    def read_cards(self):
+    def read_cards(self, viewport_only=True):
         boxes = self.profile.FindAll(U.TreeScope_Descendants, self.box_cond)
+        try:
+            pr = self.profile.CurrentBoundingRectangle
+            vx, vy, vr, vb = pr.left, pr.top, pr.right, pr.bottom
+        except Exception:
+            viewport_only = False
+            vx = vy = vr = vb = 0
         out = []
         for i in range(boxes.Length):
             box = boxes.GetElement(i)
@@ -189,6 +195,11 @@ class Collector:
             w, h = r.right - r.left, r.bottom - r.top
             if w < 80 or h < 120:
                 continue
+            if viewport_only:
+                ix, iy = max(r.left, vx), max(r.top, vy)
+                ax, ay = min(r.right, vr), min(r.bottom, vb)
+                if ax - ix < 40 or ay - iy < 60:
+                    continue
             texts = []
             cover = (r.left, r.top, r.right, r.bottom)
             try:
@@ -252,8 +263,15 @@ class Collector:
         USER32.SetCursorPos(x, y)
         time.sleep(0.25)
 
+    def _reset_top(self, steps=30):
+        self._focus()
+        for _ in range(steps):
+            self._wheel(False)
+            time.sleep(0.03)
+        time.sleep(0.3)
+
     def _wheel(self, down=True):
-        delta = -600 if down else 600
+        delta = -900 if down else 900
         USER32.mouse_event(0x0800, 0, 0, delta, 0)
 
     def _merge(self, cards, page):
@@ -278,7 +296,7 @@ class Collector:
         self._read_total()
         self._read_account()
         if self.scroll:
-            self._focus()
+            self._reset_top()
 
         no_new = 0
         pages = 0
@@ -301,6 +319,9 @@ class Collector:
             self.steps.append(step)
             if on_step:
                 on_step(step, self.snapshot())
+            if self.total_count and len(self.cards) >= self.total_count:
+                # 到达原创总数即停；继续滚会进入推荐流/历史缓存
+                break
             if no_new >= 2:
                 break
             if not self.scroll:
@@ -324,6 +345,9 @@ class Collector:
     def snapshot(self):
         cards = sorted(self.cards.values(),
                        key=lambda c: (c.get("page", 0), c["rect"][1], c["rect"][0]))
+        truncated = bool(self.total_count and len(cards) > self.total_count)
+        if truncated:
+            cards = cards[:self.total_count]
         for i, c in enumerate(cards):
             c["index"] = i
         return {
@@ -333,6 +357,7 @@ class Collector:
             "total_count": self.total_count,
             "pages": len(self.steps),
             "discovered": len(cards),
+            "truncated": truncated,
             "steps": self.steps,
             "cards": cards,
         }
