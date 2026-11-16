@@ -55,7 +55,7 @@ def complete_url(url):
 def clean_text(s):
     try:
         s = str(s).split("\x00", 1)[0]
-        return "".join(ch for ch in s if ord(ch) >= 32 and ord(ch) != 127)
+        return "".join(ch for ch in s if 33 <= ord(ch) <= 126)
     except Exception:
         return ""
 
@@ -90,6 +90,46 @@ class ActivateWorker(threading.Thread):
         c = None
         try:
             key = self.row.get("key")
+            # 如果这条 slot 已经绑定过 object_id，先直接用主进程里的新 URL，
+            # 不需要再定位/激活卡片。旧 URL 可能已经被截断或过期。
+            if self.row.get("object_id"):
+                self.q.put(("status", "按已绑定 object_id 刷新 URL…"))
+                try:
+                    _, rows = main_pairs.scan()
+                except Exception:
+                    rows = []
+                same = [r for r in rows
+                        if r.get("object_id") == self.row["object_id"]
+                        and r.get("kind") == "20302"
+                        and complete_url(clean_text(r.get("raw_url") or ""))]
+                if len(same) == 1:
+                    url = clean_text(same[0]["raw_url"])
+                    self.q.put(("bound", {"object_id": self.row["object_id"], "url": url,
+                                          "invoke": False, "meta": same[0].get("meta")}))
+                    # URL 有了还不够：需要目标视频的明文头。定位并播放几秒，
+                    # 再交给 wx-dl，否则预检会因为“内存里没有这条的头”失败。
+                    self.q.put(("status", "播放目标卡片取明文头…"))
+                    try:
+                        pc = scanmod.Collector(OUT_JSON, scroll=True)
+                        pc._init_uia()
+                        pc._pick_profile()
+                        card2 = pc.find_card(key)
+                        if card2:
+                            pc.hover(card2, seconds=1.5)
+                            pc.invoke(card2)
+                            time.sleep(2.5)
+                            pc.close_player()
+                    except Exception:
+                        pass
+                    self.q.put(("status", "下载中（wx-dl）…"))
+                    saved, reason = self._download(url, self.row["object_id"], self.row)
+                    if saved:
+                        self.q.put(("saved", {"file": saved,
+                                              "object_id": self.row["object_id"], "url": url}))
+                    else:
+                        self.q.put(("failed", reason))
+                    return
+
             self.q.put(("status", "定位卡片…"))
             c = scanmod.Collector(OUT_JSON, scroll=True)
             c._init_uia()
@@ -176,6 +216,16 @@ class ActivateWorker(threading.Thread):
     def _download(self, url, oid, row):
         url = clean_text(url)
         tag = "".join(ch for ch in clean_text(oid) if ch.isalnum()) or "slot"
+        try:
+            code = subprocess.run(
+                ["curl.exe", "-s", "-o", "NUL", "--noproxy", "*", "-m", "12",
+                 "-I", "-H", "Referer: https://liteapp.weixin.qq.com/",
+                 "-A", "Mozilla/5.0", "-w", "%{http_code}", url],
+                capture_output=True, text=True, timeout=20).stdout.strip()
+        except Exception as e:
+            return "", "URL HEAD 失败: " + str(e)
+        if code not in ("200", "206"):
+            return "", f"URL HEAD HTTP {code}（残缺/过期，需要重新取流）"
         sec = int(row.get("seconds") or 0)
         args = [
             "pwsh.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -192,10 +242,18 @@ class ActivateWorker(threading.Thread):
                 if line.startswith("SAVED="):
                     return line.split("=", 1)[1].strip(), ""
             reason = ""
-            for line in reversed(out.splitlines()):
-                if line.strip():
-                    reason = line.strip()
+            lines = [x.strip() for x in out.splitlines() if x.strip()]
+            for line in reversed(lines):
+                if line == "FAILED":
+                    continue
+                if any(k in line for k in ("预检", "配对", "内存", "时长", "下载失败", "HTTP", "候选", "明文头")):
+                    reason = line
                     break
+            if not reason:
+                for line in reversed(lines):
+                    if line != "FAILED":
+                        reason = line
+                        break
             return "", (reason or "FAILED")
         except Exception as e:
             return "", str(e)
@@ -208,6 +266,7 @@ class App(tk.Tk):
         self.geometry("1160x720")
         self.q = queue.Queue()
         self.lib = load_lib()
+        self.log_path = os.path.join(WORK, "viewer.log")
         self.cards = []
         self.photos = []
         self.page = 0
@@ -256,8 +315,15 @@ class App(tk.Tk):
         self.log.pack(fill="x", padx=8, pady=(0, 8))
 
     def logline(self, text):
+        line = time.strftime("%H:%M:%S ") + str(text)
+        try:
+            os.makedirs(WORK, exist_ok=True)
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
         self.log.configure(state="normal")
-        self.log.insert("end", text + "\n")
+        self.log.insert("end", line + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
 

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Read-only scanner for Weixin.exe's authoritative object_id <-> stream URL pairs.
 
 Adapted from the Doubao investigation (GPLv3, same project family).
@@ -29,7 +29,7 @@ B64 = re.compile(rb"[A-Za-z0-9+/=]{80,}")
 def clean_text(s):
     try:
         s = s.split("\x00", 1)[0]
-        return "".join(ch for ch in s if ord(ch) >= 32 and ord(ch) != 127)
+        return "".join(ch for ch in s if 33 <= ord(ch) <= 126)
     except Exception:
         return ""
 
