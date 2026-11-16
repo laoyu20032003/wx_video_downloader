@@ -49,7 +49,15 @@ def save_lib(d):
 
 
 def complete_url(url):
-    return bool(url and "sign=" in url and "basedata=" in url)
+    return bool(url and "sign=" in url and "basedata=" in url and "\x00" not in url)
+
+
+def clean_text(s):
+    try:
+        s = str(s).split("\x00", 1)[0]
+        return "".join(ch for ch in s if ord(ch) >= 32 and ord(ch) != 127)
+    except Exception:
+        return ""
 
 
 class ScanWorker(threading.Thread):
@@ -171,7 +179,8 @@ class ActivateWorker(threading.Thread):
         return None
 
     def _download(self, url, oid, row):
-        tag = "".join(ch for ch in oid if ch.isalnum()) or "slot"
+        url = clean_text(url)
+        tag = "".join(ch for ch in clean_text(oid) if ch.isalnum()) or "slot"
         sec = int(row.get("seconds") or 0)
         args = [
             "pwsh.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Read-only scanner for Weixin.exe's authoritative object_id <-> stream URL pairs.
 
 Adapted from the Doubao investigation (GPLv3, same project family).
@@ -24,6 +24,14 @@ except Exception:
 K32 = ctypes.WinDLL("kernel32", use_last_error=True)
 PAIR = re.compile(rb"(\d{16,20})[,\"]\s*(https://finder\.video\.qq\.com/251/(\d+)/stodownload\?[^\s\"'<>\\;,[\]()]+)")
 B64 = re.compile(rb"[A-Za-z0-9+/=]{80,}")
+
+
+def clean_text(s):
+    try:
+        s = s.split("\x00", 1)[0]
+        return "".join(ch for ch in s if ord(ch) >= 32 and ord(ch) != 127)
+    except Exception:
+        return ""
 
 
 class MBI(ctypes.Structure):
@@ -113,7 +121,7 @@ def scan_pid(pid):
             for m in PAIR.finditer(data):
                 oid = m.group(1).decode()
                 kind = m.group(3).decode()
-                raw_url = m.group(2).decode("utf-8", "ignore")
+                raw_url = clean_text(m.group(2).decode("utf-8", "ignore"))
                 if "?" not in raw_url:
                     continue
                 p = urllib.parse.parse_qs(raw_url.split("?", 1)[1])
