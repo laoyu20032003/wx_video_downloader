@@ -124,9 +124,10 @@ def run_resolve():
 
 
 class ScanWorker(threading.Thread):
-    def __init__(self, q):
+    def __init__(self, q, force=False):
         super().__init__(daemon=True)
         self.q = q
+        self.force = force
         self.collector = None
 
     def run(self):
@@ -143,11 +144,11 @@ class ScanWorker(threading.Thread):
             self.q.put(("status", "扫描 renderer 模型…"))
             try:
                 mem_path = os.path.join(WORK, "mem_model2.json")
-                if not fresh(mem_path, 600):
+                if self.force or not fresh(mem_path, 600):
                     collect_render_models()
                 self.q.put(("status", "扫描主进程完整 URL…"))
                 pairs_path = os.path.join(WORK, "main_pairs.json")
-                if fresh(pairs_path, 600):
+                if not self.force and fresh(pairs_path, 600):
                     with open(pairs_path, encoding="utf-8") as f:
                         rows = json.load(f).get("rows") or []
                 else:
@@ -299,6 +300,7 @@ class App(tk.Tk):
         self.photos = []
         self.page = 0
         self.page_size = 20
+        self.current_account = None
         self.progress = None
         self.worker = None
         self.scanner = None
@@ -309,7 +311,7 @@ class App(tk.Tk):
     def _build(self):
         bar = tk.Frame(self)
         bar.pack(fill="x", padx=8, pady=6)
-        self.scan_btn = ttk.Button(bar, text="重新扫描", command=self.start_scan)
+        self.scan_btn = ttk.Button(bar, text="重新扫描", command=lambda: self.start_scan(True))
         self.dl_btn = ttk.Button(bar, text="下载选中", command=self.download_selected)
         self.stop_btn = ttk.Button(bar, text="停止", command=self.stop)
         self.status = ttk.Label(bar, text="准备")
@@ -366,9 +368,14 @@ class App(tk.Tk):
         self.log.see("end")
         self.log.configure(state="disabled")
 
-    def start_scan(self):
+    def start_scan(self, force=False):
         if self.worker and self.worker.is_alive():
             return
+        # 手动“重新扫描”必须清掉旧账号/旧页面的展示与缓存依赖。
+        if force:
+            self.cards = []
+            self.page = 0
+            self.tree.delete(*self.tree.get_children())
         self.scan_btn.configure(state="disabled")
         self.dl_btn.configure(state="disabled")
         self.status.configure(text="采集中…")
@@ -384,7 +391,7 @@ class App(tk.Tk):
             self.progress_label.pack(fill="both", expand=True, padx=12, pady=12)
         self.progress.deiconify()
         self.progress_label.configure(text="准备扫描…")
-        self.scanner = ScanWorker(self.q)
+        self.scanner = ScanWorker(self.q, force=force)
         self.scanner.start()
 
     def stop(self):
@@ -412,6 +419,7 @@ class App(tk.Tk):
                     if row:
                         row["status"] = "failed"
                         row["error"] = item[1]
+                        row["account"] = self.current_account
                         self.lib[row["key"]] = row
                         save_lib(self.lib)
                     self.status.configure(text="失败: " + item[1])
@@ -434,6 +442,7 @@ class App(tk.Tk):
                         row["object_id"] = d.get("object_id")
                         row["url"] = d.get("url")
                         row["status"] = "downloading"
+                        row["account"] = self.current_account
                         self.lib[row["key"]] = row
                         save_lib(self.lib)
                     self.logline(f"bound oid={d.get('object_id')}")
@@ -446,6 +455,7 @@ class App(tk.Tk):
                         row["status"] = "done"
                         row["object_id"] = d.get("object_id")
                         row["url"] = d.get("url")
+                        row["account"] = self.current_account
                         self.lib[row["key"]] = row
                         save_lib(self.lib)
                     self.deiconify()
@@ -461,6 +471,7 @@ class App(tk.Tk):
                     if row:
                         row["status"] = "failed"
                         row["error"] = item[1]
+                        row["account"] = self.current_account
                         self.lib[row["key"]] = row
                         save_lib(self.lib)
                     self.status.configure(text="失败: " + item[1])
@@ -483,7 +494,13 @@ class App(tk.Tk):
     def on_scan_done(self, snap):
         self._close_progress()
         self.deiconify()
+        new_account = snap.get("account") or "-"
+        changed = bool(self.current_account and new_account != self.current_account)
+        self.current_account = new_account
         self.cards = snap.get("cards", [])
+        if changed:
+            self.page = 0
+            self.logline(f"账号已切换: {new_account}，已清空旧列表状态")
         resolved = (snap.get("resolved") or {}).get("rows") or []
         by_idx = {r.get("index"): r for r in resolved if r.get("index") is not None}
         for c in self.cards:
@@ -498,19 +515,20 @@ class App(tk.Tk):
                 c["pos_check"] = r.get("pos_check")
             else:
                 c["status"] = "pending"
-        # 合并已下载文件状态；不要用旧库里的 stale URL/status 覆盖本次解析结果
+        # 合并已下载文件状态；旧账号/旧 URL 不能覆盖本次解析结果。
         for c in self.cards:
             old = self.lib.get(c["key"], {})
+            if old.get("account") not in (None, new_account):
+                old = {}
             if not c.get("object_id") and old.get("object_id"):
                 c["object_id"] = old["object_id"]
             if old.get("file") and os.path.exists(old["file"]):
                 c["file"] = old["file"]
                 c["status"] = "done"
-            if c.get("file") and os.path.exists(c["file"]):
-                c["status"] = "done"
-        self.account.configure(text="账号: " + (snap.get("account") or "-"))
+        self.account.configure(text="账号: " + new_account)
+        prefix = "账号已切换 · " if changed else ""
         self.status.configure(
-            text=f"完成 · {snap.get('discovered',0)} 张 · {snap.get('total_text','')}")
+            text=f"{prefix}完成 · {snap.get('discovered',0)} 张 · {snap.get('total_text','')}")
         self.render()
         self.scan_btn.configure(state="normal")
         self.dl_btn.configure(state="normal")
@@ -596,6 +614,7 @@ class App(tk.Tk):
         self.dl_btn.configure(state="disabled")
         self.status.configure(text="下载任务开始…")
         row["status"] = "hovering"
+        row["account"] = self.current_account
         self.render()
         self.worker = DownloadWorker(self.q, dict(row))
         self.worker.start()
