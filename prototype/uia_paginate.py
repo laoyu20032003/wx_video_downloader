@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """UIA 滚动分页采集器（原型，可复制到 tools/uia-collect.py 的位置）。
 
 特点：
@@ -68,12 +68,13 @@ def parse_like(s):
 
 
 class Collector:
-    def __init__(self, out_path, wait=0.8, max_pages=12, scroll=True, restore=True):
+    def __init__(self, out_path, wait=0.8, max_pages=12, scroll=True, restore=True, cap=False):
         self.out_path = out_path
         self.wait = wait
         self.max_pages = max_pages
         self.scroll = scroll
         self.restore = restore
+        self.cap = cap
         self.stop_flag = False
         self.cards = {}
         self.steps = []
@@ -319,7 +320,7 @@ class Collector:
             self.steps.append(step)
             if on_step:
                 on_step(step, self.snapshot())
-            if self.total_count and len(self.cards) >= self.total_count:
+            if self.cap and self.total_count and len(self.cards) >= self.total_count:
                 # 到达原创总数即停；继续滚会进入推荐流/历史缓存
                 break
             if no_new >= 2:
@@ -345,7 +346,7 @@ class Collector:
     def snapshot(self):
         cards = sorted(self.cards.values(),
                        key=lambda c: (c.get("page", 0), c["rect"][1], c["rect"][0]))
-        truncated = bool(self.total_count and len(cards) > self.total_count)
+        truncated = bool(self.cap and self.total_count and len(cards) > self.total_count)
         if truncated:
             cards = cards[:self.total_count]
         for i, c in enumerate(cards):
@@ -376,9 +377,10 @@ def main():
     ap.add_argument("--max-pages", type=int, default=12)
     ap.add_argument("--no-scroll", action="store_true")
     ap.add_argument("--no-restore", action="store_true")
+    ap.add_argument("--cap", action="store_true")
     a = ap.parse_args()
     col = Collector(a.out, wait=a.wait, max_pages=a.max_pages,
-                    scroll=not a.no_scroll, restore=not a.no_restore)
+                    scroll=not a.no_scroll, restore=not a.no_restore, cap=a.cap)
 
     def on_step(step, snap):
         print("page={page} tree={tree} unique={unique} new={new} y={min_y}..{max_y}".format(**step))

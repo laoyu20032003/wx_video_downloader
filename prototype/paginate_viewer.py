@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """最小可用的滚动分页查看器（Tkinter，不依赖 PyQt）。
 
 启动后自动在微信作者主页里滚动，表格会随采集增量刷新。
@@ -75,7 +75,7 @@ class App(tk.Tk):
         self.stop_btn.configure(state="normal")
         self.status.configure(text="采集中…（会自动滚动微信）")
         self.tree.delete(*self.tree.get_children())
-        self.collector = Collector(OUT, wait=0.75, max_pages=20, scroll=True, restore=True)
+        self.collector = Collector(OUT, wait=0.75, max_pages=45, scroll=True, restore=True, cap=False)
         self.worker = Worker(self.q, self.collector)
         self.worker.start()
 
