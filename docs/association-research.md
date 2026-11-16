@@ -1,4 +1,4 @@
-﻿> **来源与状态**
+> **来源与状态**
 >
 > 本文导入自豆包的本地调研记录（原文件 `D:\Doubao\wx_video_downloader\docs\association-research.md`），保留当时的时间、PID、工具路径和失败方向，作为“为什么这样设计”的原始证据。
 >
@@ -772,7 +772,7 @@ https://finder.video.qq.com/251/20302/stodownload?encfilekey=nLWUlAoVvywFBEjUaZk
 
 ### 16.35 参考只读项目 D:\GitHub\wx_video_downloader 的全量列表方案
 
-**只读参考，未写入该目录。** 其 `prototype/` 已跑通“完全列表”：
+**只读参考，未写入该目录。** 其已归档原型（[archive/prototype-uia.md](archive/prototype-uia.md)）跑通了“完全列表”：
 - `uia_paginate.py`：定位活动 `page-profile` → 读当前批次 click-box → 鼠标滚轮逐屏翻页 → 按 `时长|点赞|文案` 指纹增量合并 → 连续两页无新增停止 → 结束回顶。
 - 同账号“乖乖兔3311”实测：头部标注 **163 条原创内容**，顺序滚到底去重后 **330 张 / 33 页**。
 - **口径修正（推翻 §16.34 的 163 占位假设）**：163 是“原创声明且审核通过”的作品数，不等于主页作品总数；330 = 原创 + 未声明原创 + 图文/图片动态/直播回放等。不能拿 163 截断或预留空槽。

@@ -3,8 +3,8 @@
 
   只读 UIA，不点击卡片。滚轮在卡片网格中心发送，结束时滚回顶部。
   用法：
-    powershell -Sta -File prototype\uia-scroll-probe.ps1
-    powershell -Sta -File prototype\uia-scroll-probe.ps1 -Steps 8 -Out work\scroll_probe.json
+    powershell -Sta -File tools\uia-scroll-probe.ps1
+    powershell -Sta -File tools\uia-scroll-probe.ps1 -Steps 8 -Out work\scroll_probe.json
 #>
 param(
   [int]$Steps = 6,
