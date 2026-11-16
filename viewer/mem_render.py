@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """三期：跨 renderer 堆聚合卡片模型记录。
 
 枚举所有 `--type=renderer` 的 WeChatAppEx 进程，从堆里抽取三类结构化记录并按 oid 合并：
@@ -144,21 +144,19 @@ def scan_pid(pid, window=3000):
 
 def renderer_pids():
     out = []
-    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+    for p in psutil.process_iter(["pid", "name", "cmdline", "memory_info"]):
         if (p.info["name"] or "").lower() != "wechatappex.exe":
             continue
         cl = " ".join(p.info["cmdline"] or [])
         if "--type=renderer" in cl:
-            out.append(p.info["pid"])
-    return out
+            rss = (p.info.get("memory_info").rss if p.info.get("memory_info") else 0)
+            out.append((rss, p.info["pid"]))
+    # 视频号主页在占用最大的 renderer 里；只扫它，避免 6 个进程 × 47s。
+    out.sort(reverse=True)
+    return [pid for _, pid in out[:1]]
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                  "work", "mem_model2.json"))
-    a = ap.parse_args()
-
+def scan_all():
     merged = {}
     total_pid = 0
     for pid in renderer_pids():
@@ -176,8 +174,15 @@ def main():
                 if not old["nonce"] and rec["nonce"]:
                     old["nonce"] = rec["nonce"]
                 old.setdefault("media", {}).update(rec.get("media") or {})
+    return total_pid, list(merged.values())
 
-    records = list(merged.values())
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                  "work", "mem_model2.json"))
+    a = ap.parse_args()
+
+    total_pid, records = scan_all()
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     json.dump(records, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     dec = sum(1 for r in records if r["decoded"] and r["decoded"].get("vid_len") is not None)

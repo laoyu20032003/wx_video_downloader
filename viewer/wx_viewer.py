@@ -32,6 +32,7 @@ TOOL = os.path.join(ROOT, "wx-dl.ps1")
 sys.path.insert(0, HERE)
 import uia_scan as scanmod
 import main_pairs
+import mem_render
 
 
 def load_lib():
@@ -80,6 +81,22 @@ def clean_text(s):
         return ""
 
 
+def collect_render_models():
+    total_pid, records = mem_render.scan_all()
+    with open(os.path.join(WORK, "mem_model2.json"), "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False)
+    return total_pid, records
+
+
+def run_resolve():
+    subprocess.run(
+        [sys.executable.replace("pythonw.exe", "python.exe"),
+         os.path.join(HERE, "resolve.py")],
+        capture_output=True, timeout=120)
+    with open(os.path.join(WORK, "resolved_cards.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
 class ScanWorker(threading.Thread):
     def __init__(self, q):
         super().__init__(daemon=True)
@@ -99,20 +116,13 @@ class ScanWorker(threading.Thread):
             # 跨层绑定：renderer 记录（oid/index/时长/点赞） + 主进程完整 URL
             self.q.put(("status", "扫描 renderer 模型…"))
             try:
-                subprocess.run(
-                    [sys.executable, os.path.join(HERE, "mem_render.py"),
-                     "--out", os.path.join(WORK, "mem_model2.json")],
-                    capture_output=True, timeout=120)
+                collect_render_models()
                 self.q.put(("status", "扫描主进程完整 URL…"))
                 pid, rows = main_pairs.scan()
                 with open(os.path.join(WORK, "main_pairs.json"), "w", encoding="utf-8") as f:
                     json.dump({"pid": pid, "rows": rows}, f, ensure_ascii=False)
                 self.q.put(("status", "按 oid/序号/时长/点赞绑定…"))
-                subprocess.run(
-                    [sys.executable, os.path.join(HERE, "resolve.py")],
-                    capture_output=True, timeout=120)
-                with open(os.path.join(WORK, "resolved_cards.json"), encoding="utf-8") as f:
-                    snap["resolved"] = json.load(f)
+                snap["resolved"] = run_resolve()
             except Exception as e:
                 snap["resolve_error"] = str(e)
 
@@ -135,177 +145,72 @@ class BaselineWorker(threading.Thread):
             self.q.put(("baseline_error", str(e)))
 
 
-class ActivateWorker(threading.Thread):
+class DownloadWorker(threading.Thread):
+    """Per-row downloader. Pending rows are hovered for 8s, then rebound by oid/index."""
+
     def __init__(self, q, row):
         super().__init__(daemon=True)
         self.q = q
         self.row = row
+        self.key = row.get("key")
 
     def run(self):
-        c = None
         try:
             key = self.row.get("key")
-            url0 = clean_text(self.row.get("url") or "")
-            if not complete_url(url0):
-                self.q.put(("error", "这张卡没有绑定完整 URL；请先 hover 8 秒后刷新解析"))
-                return
-
-            # 豆包新结论：hover 8 秒即可让预览解码，明文头常驻，不必点开播放器。
-            self.q.put(("status", "定位卡片…"))
             c = scanmod.Collector(OUT_JSON, scroll=True)
             c._init_uia()
             c._pick_profile()
+            self.q.put(("status", "定位卡片…"))
             card = c.find_card(key)
             if not card:
-                self.q.put(("error", "当前 UIA 网格里找不到这张卡"))
+                self.q.put(("error", "当前 UIA 网格里找不到这张卡", key))
                 return
-            self.q.put(("status", "hover 8 秒取明文头…"))
+
+            # 无论 ready 还是 pending，都先 hover 8 秒：
+            # ready 需要明文头；pending 还需要让 renderer 建立 oid/URL 记录。
+            self.q.put(("status", "hover 8 秒（不点击播放）…"))
             c.hover(card, seconds=8.0)
-            self.q.put(("bound", {"object_id": self.row.get("object_id"), "url": url0,
-                                  "invoke": False, "meta": None}))
-            self.q.put(("status", "下载中（wx-dl）…"))
-            saved, reason = self._download(url0, self.row.get("object_id") or "slot", self.row)
-            if saved:
-                self.q.put(("saved", {"file": saved,
-                                      "object_id": self.row.get("object_id"), "url": url0}))
-            else:
-                self.q.put(("failed", reason))
-            return
-            # 如果这条 slot 已经绑定过 object_id，先直接用主进程里的新 URL，
-            # 不需要再定位/激活卡片。旧 URL 可能已经被截断或过期。
-            if self.row.get("object_id"):
-                self.q.put(("status", "按已绑定 object_id 刷新 URL…"))
-                try:
-                    _, rows = main_pairs.scan()
-                except Exception:
-                    rows = []
-                same = [r for r in rows
-                        if r.get("object_id") == self.row["object_id"]
-                        and r.get("kind") == "20302"
-                        and complete_url(clean_text(r.get("raw_url") or ""))]
-                if len(same) == 1:
-                    url = clean_text(same[0]["raw_url"])
-                    self.q.put(("bound", {"object_id": self.row["object_id"], "url": url,
-                                          "invoke": False, "meta": same[0].get("meta")}))
-                    # URL 有了还不够：需要目标视频的明文头。定位并播放几秒，
-                    # 再交给 wx-dl，否则预检会因为“内存里没有这条的头”失败。
-                    self.q.put(("status", "播放目标卡片取明文头…"))
-                    try:
-                        pc = scanmod.Collector(OUT_JSON, scroll=True)
-                        pc._init_uia()
-                        pc._pick_profile()
-                        card2 = pc.find_card(key)
-                        if card2:
-                            pc.hover(card2, seconds=1.5)
-                            pc.invoke(card2)
-                            time.sleep(2.5)
-                            pc.close_player()
-                    except Exception:
-                        pass
-                    self.q.put(("status", "下载中（wx-dl）…"))
-                    saved, reason = self._download(url, self.row["object_id"], self.row)
-                    if saved:
-                        self.q.put(("saved", {"file": saved,
-                                              "object_id": self.row["object_id"], "url": url}))
-                    else:
-                        self.q.put(("failed", reason))
+
+            url = clean_text(self.row.get("url") or "")
+            oid = self.row.get("object_id")
+            if not complete_url(url):
+                self.q.put(("status", "重新扫描 oid ↔ URL…"))
+                url, oid = self._refresh_binding()
+                if not complete_url(url):
+                    self.q.put(("error", "hover 后仍没有可绑定的完整 URL", key))
                     return
 
-            self.q.put(("status", "定位卡片…"))
-            base = load_baseline()
-            if not base:
-                self.q.put(("status", "建立主进程配对基线…"))
-                try:
-                    _, b0 = main_pairs.scan()
-                    save_baseline(b0)
-                    base = {(str(r["object_id"]), str(r["kind"])) for r in b0}
-                except Exception:
-                    base = set()
-            c = scanmod.Collector(OUT_JSON, scroll=True)
-            c._init_uia()
-            c._pick_profile()
-            card = c.find_card(key)
-            if not card:
-                self.q.put(("error", "当前 UIA 网格里找不到这张卡（可能文案/时长变了，或存在重复）"))
-                return
-
-            self.q.put(("status", "激活取流…"))
-            c.hover(card, seconds=2.2)
-            time.sleep(0.8)
-
-            # 不再做“激活前全量扫描”；激活后扫一次即可。
-            # 主进程全量扫描约 46s，做两次会让下载等两分钟。
-            self.q.put(("status", "扫描 object_id ↔ URL…"))
-            try:
-                _, after = main_pairs.scan()
-            except Exception:
-                after = []
-
-            # hover 没有可用配对时，Invoke 打开播放器再扫一次。
-            used_invoke = False
-            new = [r for r in after
-                   if (str(r.get("object_id")), str(r.get("kind"))) not in base]
-            pair = self._choose(new, self.row) or self._choose(after, self.row)
-            if not pair:
-                self.q.put(("status", "Invoke 播放取流…"))
-                if c.invoke(card):
-                    used_invoke = True
-                    time.sleep(2.5)
-                    try:
-                        _, after2 = main_pairs.scan()
-                    except Exception:
-                        after2 = after
-                    new2 = [r for r in after2
-                            if (str(r.get("object_id")), str(r.get("kind"))) not in base]
-                    pair = self._choose(new2, self.row) or self._choose(after2, self.row)
-                    c.close_player()
-                else:
-                    c.close_player()
-
-            if not pair:
-                self.q.put(("error", "激活后没有可信的 object_id↔URL；保持 pending"))
-                return
-
-            url = clean_text(pair["raw_url"])
-            oid = pair["object_id"]
-            self.q.put(("bound", {"object_id": oid, "url": url,
-                                  "invoke": used_invoke, "meta": pair.get("meta")}))
-
+            self.q.put(("bound", {"key": key, "object_id": oid, "url": url}))
             self.q.put(("status", "下载中（wx-dl）…"))
-            saved, reason = self._download(url, oid, self.row)
+            saved, reason = self._download(url, oid or "slot", self.row)
             if saved:
-                self.q.put(("saved", {"file": saved, "object_id": oid, "url": url}))
+                self.q.put(("saved", {"key": key, "file": saved,
+                                      "object_id": oid, "url": url}))
             else:
-                self.q.put(("failed", reason))
+                self.q.put(("failed", reason, key))
         except Exception as e:
-            self.q.put(("error", str(e)))
+            self.q.put(("error", str(e), self.key))
 
-    def _choose(self, rows, row):
-        rows = [r for r in rows if r.get("kind") == "20302" and complete_url(r.get("raw_url"))]
-        if not rows:
-            return None
-        sec = int(row.get("seconds") or 0)
-        scored = []
-        for r in rows:
-            m = r.get("meta") or {}
-            dl = m.get("vid_len")
-            if sec and dl is not None:
-                try:
-                    diff = abs(int(dl) - sec)
-                except Exception:
-                    diff = 99999
-            else:
-                diff = 99999
-            scored.append((diff, r))
-        scored.sort(key=lambda x: x[0])
-        if len(scored) == 1:
-            return scored[0][1]
-        if scored[0][0] <= 3:
-            # 唯一时长命中才接受；多个相同分数视为歧义
-            same = [r for d, r in scored if d == scored[0][0]]
-            if len(same) == 1:
-                return same[0]
-        return None
+    def _resolve(self):
+        collect_render_models()
+        return run_resolve().get("rows") or []
+
+    def _refresh_binding(self):
+        idx = self.row.get("index")
+        rows = self._resolve()
+        rec = next((x for x in rows if x.get("index") == idx), None)
+        if rec and complete_url(clean_text(rec.get("url") or "")):
+            return clean_text(rec["url"]), rec.get("object_id")
+
+        # 缓存里没有完整 URL 时，才扫一次主进程；不是每次点击都扫。
+        pid, pairs = main_pairs.scan()
+        with open(os.path.join(WORK, "main_pairs.json"), "w", encoding="utf-8") as f:
+            json.dump({"pid": pid, "rows": pairs}, f, ensure_ascii=False)
+        rows = self._resolve()
+        rec = next((x for x in rows if x.get("index") == idx), None)
+        if rec and complete_url(clean_text(rec.get("url") or "")):
+            return clean_text(rec["url"]), rec.get("object_id")
+        return "", None
 
     def _download(self, url, oid, row):
         url = clean_text(url)
@@ -320,6 +225,7 @@ class ActivateWorker(threading.Thread):
             return "", "URL HEAD 失败: " + str(e)
         if code not in ("200", "206"):
             return "", f"URL HEAD HTTP {code}（残缺/过期，需要重新取流）"
+
         sec = int(row.get("seconds") or 0)
         args = [
             "pwsh.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -335,23 +241,18 @@ class ActivateWorker(threading.Thread):
             for line in out.splitlines():
                 if line.startswith("SAVED="):
                     return line.split("=", 1)[1].strip(), ""
-            reason = ""
             lines = [x.strip() for x in out.splitlines() if x.strip()]
             for line in reversed(lines):
                 if line == "FAILED":
                     continue
                 if any(k in line for k in ("预检", "配对", "内存", "时长", "下载失败", "HTTP", "候选", "明文头")):
-                    reason = line
-                    break
-            if not reason:
-                for line in reversed(lines):
-                    if line != "FAILED":
-                        reason = line
-                        break
-            return "", (reason or "FAILED")
+                    return "", line
+            for line in reversed(lines):
+                if line != "FAILED":
+                    return "", line
+            return "", "FAILED"
         except Exception as e:
             return "", str(e)
-
 
 class App(tk.Tk):
     def __init__(self):
@@ -394,15 +295,17 @@ class App(tk.Tk):
         style = ttk.Style(self)
         style.configure("Treeview", rowheight=96)
         self.tree = ttk.Treeview(self, show="tree headings",
-                                 columns=("seq", "dur", "like", "status", "desc"))
+                                 columns=("seq", "dur", "like", "status", "act", "desc"))
         self.tree.heading("#0", text="封面")
         self.tree.column("#0", width=72, anchor="center")
-        for c, t, w in (("seq", "序号", 55), ("dur", "时长", 70),
-                        ("like", "点赞", 70), ("status", "状态", 90),
-                        ("desc", "文案", 760)):
+        for c, t, w in (("seq", "序号", 50), ("dur", "时长", 65),
+                        ("like", "点赞", 65), ("status", "状态", 85),
+                        ("act", "操作", 70), ("desc", "文案", 700)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w")
+        self.tree.column("act", anchor="center")
         self.tree.pack(fill="both", expand=True, padx=8, pady=4)
+        self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Double-1>", lambda e: self.download_selected())
 
         self.log = tk.Text(self, height=7, state="disabled")
@@ -448,7 +351,8 @@ class App(tk.Tk):
                     self.on_scan_done(item[1])
                 elif kind == "error":
                     self.deiconify()
-                    row = self.selected()
+                    key = item[2] if len(item) > 2 else None
+                    row = self.row_by_key(key) or self.selected()
                     if row:
                         row["status"] = "failed"
                         row["error"] = item[1]
@@ -458,6 +362,7 @@ class App(tk.Tk):
                     self.logline("ERROR " + item[1])
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
+                    self.render()
                 elif kind == "baseline":
                     self.logline(f"主进程配对基线已建立: {item[1]}")
                 elif kind == "baseline_error":
@@ -467,21 +372,23 @@ class App(tk.Tk):
                     self.logline(item[1])
                 elif kind == "bound":
                     d = item[1]
-                    row = self.selected()
+                    row = self.row_by_key(d.get("key")) or self.selected()
                     if row:
-                        row["object_id"] = d["object_id"]
-                        row["url"] = d["url"]
+                        row["object_id"] = d.get("object_id")
+                        row["url"] = d.get("url")
+                        row["status"] = "downloading"
                         self.lib[row["key"]] = row
                         save_lib(self.lib)
-                    self.logline(f"bound oid={d['object_id']} invoke={d['invoke']}")
+                    self.logline(f"bound oid={d.get('object_id')}")
+                    self.render()
                 elif kind == "saved":
                     d = item[1]
-                    row = self.selected()
+                    row = self.row_by_key(d.get("key")) or self.selected()
                     if row:
                         row["file"] = d["file"]
                         row["status"] = "done"
-                        row["object_id"] = d["object_id"]
-                        row["url"] = d["url"]
+                        row["object_id"] = d.get("object_id")
+                        row["url"] = d.get("url")
                         self.lib[row["key"]] = row
                         save_lib(self.lib)
                     self.deiconify()
@@ -492,7 +399,8 @@ class App(tk.Tk):
                     self.dl_btn.configure(state="normal")
                 elif kind == "failed":
                     self.deiconify()
-                    row = self.selected()
+                    key = item[2] if len(item) > 2 else None
+                    row = self.row_by_key(key) or self.selected()
                     if row:
                         row["status"] = "failed"
                         row["error"] = item[1]
@@ -500,6 +408,7 @@ class App(tk.Tk):
                         save_lib(self.lib)
                     self.status.configure(text="失败: " + item[1])
                     self.logline("FAILED " + item[1])
+                    self.render()
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
         except queue.Empty:
@@ -563,7 +472,7 @@ class App(tk.Tk):
             st = c.get("status", "pending")
             self.tree.insert("", "end", image=photo, values=(
                 i + 1, c.get("duration", ""), c.get("like", ""), st,
-                (c.get("desc") or "")[:110]))
+                "下载", (c.get("desc") or "")[:110]))
 
     def prev_page(self):
         if self.page > 0:
@@ -576,6 +485,19 @@ class App(tk.Tk):
             self.page += 1
             self.render()
 
+    def on_tree_click(self, event):
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        if self.tree.identify_column(event.x) != "#5":
+            return
+        rid = self.tree.identify_row(event.y)
+        if not rid:
+            return
+        i = self.page * self.page_size + self.tree.index(rid)
+        if 0 <= i < len(self.cards):
+            self.tree.selection_set(rid)
+            self.download_row(self.cards[i])
+
     def selected(self):
         items = self.tree.selection()
         if not items:
@@ -583,19 +505,33 @@ class App(tk.Tk):
         i = self.page * self.page_size + self.tree.index(items[0])
         return self.cards[i] if 0 <= i < len(self.cards) else None
 
+    def row_by_key(self, key):
+        if not key:
+            return None
+        for c in self.cards:
+            if c.get("key") == key:
+                return c
+        return None
+
     def download_selected(self):
         row = self.selected()
         if not row:
             messagebox.showinfo("提示", "先选中一行")
             return
+        self.download_row(row)
+
+    def download_row(self, row):
         if row.get("file") and os.path.exists(row["file"]):
             os.startfile(os.path.dirname(row["file"]))
             return
         if self.worker and self.worker.is_alive():
+            messagebox.showinfo("提示", "已有下载任务在运行")
             return
         self.dl_btn.configure(state="disabled")
-        self.status.configure(text="激活卡片…")
-        self.worker = ActivateWorker(self.q, dict(row))
+        self.status.configure(text="下载任务开始…")
+        row["status"] = "hovering"
+        self.render()
+        self.worker = DownloadWorker(self.q, dict(row))
         self.worker.start()
 
 
