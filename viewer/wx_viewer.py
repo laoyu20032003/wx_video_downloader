@@ -382,7 +382,7 @@ class App(tk.Tk):
             return
         if self.worker and self.worker.is_alive():
             return
-        self.withdraw()
+        self.dl_btn.configure(state="disabled")
         self.status.configure(text="激活卡片…")
         self.worker = ActivateWorker(self.q, dict(row))
         self.worker.start()
