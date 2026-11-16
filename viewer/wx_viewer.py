@@ -81,6 +81,13 @@ def clean_text(s):
         return ""
 
 
+def fresh(path, seconds):
+    try:
+        return os.path.exists(path) and (time.time() - os.path.getmtime(path)) < seconds
+    except Exception:
+        return False
+
+
 def collect_render_models():
     total_pid, records = mem_render.scan_all()
     with open(os.path.join(WORK, "mem_model2.json"), "w", encoding="utf-8") as f:
@@ -116,11 +123,18 @@ class ScanWorker(threading.Thread):
             # 跨层绑定：renderer 记录（oid/index/时长/点赞） + 主进程完整 URL
             self.q.put(("status", "扫描 renderer 模型…"))
             try:
-                collect_render_models()
+                mem_path = os.path.join(WORK, "mem_model2.json")
+                if not fresh(mem_path, 600):
+                    collect_render_models()
                 self.q.put(("status", "扫描主进程完整 URL…"))
-                pid, rows = main_pairs.scan()
-                with open(os.path.join(WORK, "main_pairs.json"), "w", encoding="utf-8") as f:
-                    json.dump({"pid": pid, "rows": rows}, f, ensure_ascii=False)
+                pairs_path = os.path.join(WORK, "main_pairs.json")
+                if fresh(pairs_path, 600):
+                    with open(pairs_path, encoding="utf-8") as f:
+                        rows = json.load(f).get("rows") or []
+                else:
+                    pid, rows = main_pairs.scan()
+                    with open(pairs_path, "w", encoding="utf-8") as f:
+                        json.dump({"pid": pid, "rows": rows}, f, ensure_ascii=False)
                 self.q.put(("status", "按 oid/序号/时长/点赞绑定…"))
                 snap["resolved"] = run_resolve()
             except Exception as e:
@@ -266,6 +280,7 @@ class App(tk.Tk):
         self.photos = []
         self.page = 0
         self.page_size = 20
+        self.progress = None
         self.worker = None
         self.scanner = None
         self._build()
@@ -311,6 +326,14 @@ class App(tk.Tk):
         self.log = tk.Text(self, height=7, state="disabled")
         self.log.pack(fill="x", padx=8, pady=(0, 8))
 
+    def _progress(self, text):
+        try:
+            if getattr(self, "progress", None) and self.progress.winfo_exists():
+                self.progress_label.configure(text=str(text))
+                self.progress.lift()
+        except Exception:
+            pass
+
     def logline(self, text):
         line = time.strftime("%H:%M:%S ") + str(text)
         try:
@@ -331,6 +354,17 @@ class App(tk.Tk):
         self.dl_btn.configure(state="disabled")
         self.status.configure(text="采集中…")
         self.withdraw()  # 避免窗口遮住微信卡片，影响封面截图
+        # 主窗口隐藏时也必须让用户看到进度；放在屏幕左上，避开视频号卡片。
+        if not getattr(self, "progress", None) or not self.progress.winfo_exists():
+            self.progress = tk.Toplevel(self)
+            self.progress.title("视频号扫描")
+            self.progress.geometry("420x110+10+10")
+            self.progress.attributes("-topmost", True)
+            self.progress_label = ttk.Label(
+                self.progress, text="准备扫描…", wraplength=390, justify="left")
+            self.progress_label.pack(fill="both", expand=True, padx=12, pady=12)
+        self.progress.deiconify()
+        self.progress_label.configure(text="准备扫描…")
         self.scanner = ScanWorker(self.q)
         self.scanner.start()
 
@@ -345,11 +379,14 @@ class App(tk.Tk):
                 kind = item[0]
                 if kind == "step":
                     _, step, snap = item
-                    self.status.configure(
-                        text=f"第 {step['page']} 页 · 已发现 {step['unique']} · 新增 {step['new']}")
+                    msg = f"第 {step['page']} 页 · 已发现 {step['unique']} · 新增 {step['new']}"
+                    self.status.configure(text=msg)
+                    self._progress(msg)
                 elif kind == "done":
+                    self._close_progress()
                     self.on_scan_done(item[1])
                 elif kind == "error":
+                    self._close_progress()
                     self.deiconify()
                     key = item[2] if len(item) > 2 else None
                     row = self.row_by_key(key) or self.selected()
@@ -369,6 +406,7 @@ class App(tk.Tk):
                     self.logline("主进程配对基线失败: " + item[1])
                 elif kind == "status":
                     self.status.configure(text=item[1])
+                    self._progress(item[1])
                     self.logline(item[1])
                 elif kind == "bound":
                     d = item[1]
@@ -415,7 +453,16 @@ class App(tk.Tk):
             pass
         self.after(150, self.poll)
 
+    def _close_progress(self):
+        try:
+            if getattr(self, "progress", None) and self.progress.winfo_exists():
+                self.progress.destroy()
+        except Exception:
+            pass
+        self.progress = None
+
     def on_scan_done(self, snap):
+        self._close_progress()
         self.deiconify()
         self.cards = snap.get("cards", [])
         resolved = (snap.get("resolved") or {}).get("rows") or []
