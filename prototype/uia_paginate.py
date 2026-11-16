@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """UIA 滚动分页采集器（原型，可复制到 tools/uia-collect.py 的位置）。
 
 特点：
@@ -154,6 +154,8 @@ class Collector:
                 m = TOTAL_RE.search(n)
                 if m:
                     self.total_text = n
+                    # 注意：这是主页的“原创内容”计数，不是作品总数。
+                    # 未声明原创、图片/图文、直播回放也会出现在主页作品流里，因此默认不拿它当截断上限。
                     self.total_count = int(m.group(1))
                     return
         except Exception:
