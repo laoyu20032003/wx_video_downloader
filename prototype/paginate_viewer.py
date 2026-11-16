@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """最小可用的滚动分页查看器（Tkinter，不依赖 PyQt）。
 
 启动后自动在微信作者主页里滚动，表格会随采集增量刷新。
@@ -10,6 +10,7 @@ import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
+from PIL import Image, ImageTk
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from uia_paginate import Collector
@@ -42,6 +43,7 @@ class App(tk.Tk):
         self.q = queue.Queue()
         self.worker = None
         self.collector = None
+        self.photos = []
         self._build()
         self.after(600, self.start)
         self.after(200, self.poll)
@@ -57,7 +59,11 @@ class App(tk.Tk):
         self.status.pack(side="left", padx=10)
 
         cols = ("seq", "page", "dur", "like", "desc")
-        self.tree = ttk.Treeview(self, columns=cols, show="headings")
+        style = ttk.Style(self)
+        style.configure("Treeview", rowheight=96)
+        self.tree = ttk.Treeview(self, columns=cols, show="tree headings")
+        self.tree.heading("#0", text="封面")
+        self.tree.column("#0", width=72, anchor="center")
         for c, t, w in (
             ("seq", "序号", 60), ("page", "页", 50), ("dur", "时长", 80),
             ("like", "点赞", 80), ("desc", "文案", 650)):
@@ -113,8 +119,19 @@ class App(tk.Tk):
 
     def render(self, snap):
         self.tree.delete(*self.tree.get_children())
+        self.photos = []
         for c in snap["cards"]:
-            self.tree.insert("", "end", values=(
+            photo = None
+            path = c.get("cover_path") or ""
+            if path and os.path.exists(path):
+                try:
+                    img = Image.open(path)
+                    img.thumbnail((64, 90))
+                    photo = ImageTk.PhotoImage(img)
+                    self.photos.append(photo)
+                except Exception:
+                    photo = None
+            self.tree.insert("", "end", image=photo, values=(
                 c.get("index", ""), c.get("page", ""), c.get("duration", ""),
                 c.get("like", ""), (c.get("desc") or "")[:100]))
         self.footer.configure(

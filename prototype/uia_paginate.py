@@ -16,6 +16,7 @@
 import argparse
 import ctypes
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -68,13 +69,15 @@ def parse_like(s):
 
 
 class Collector:
-    def __init__(self, out_path, wait=0.8, max_pages=12, scroll=True, restore=True, cap=False):
+    def __init__(self, out_path, wait=0.8, max_pages=12, scroll=True, restore=True, cap=False, capture_covers=True):
         self.out_path = out_path
         self.wait = wait
         self.max_pages = max_pages
         self.scroll = scroll
         self.restore = restore
         self.cap = cap
+        self.capture_covers = capture_covers
+        self.cover_dir = os.path.join(os.path.dirname(os.path.abspath(out_path)), "covers_uia")
         self.stop_flag = False
         self.cards = {}
         self.steps = []
@@ -277,13 +280,38 @@ class Collector:
         delta = -900 if down else 900
         USER32.mouse_event(0x0800, 0, 0, delta, 0)
 
+    def _capture_cover(self, card):
+        if not self.capture_covers:
+            return ""
+        try:
+            from PIL import ImageGrab
+            r = card.get("cover") or card.get("rect")
+            left, top, right, bottom = [int(x) for x in r]
+            sw = USER32.GetSystemMetrics(0)
+            sh = USER32.GetSystemMetrics(1)
+            left, top = max(0, left), max(0, top)
+            right, bottom = min(sw, right), min(sh, bottom)
+            if right - left < 40 or bottom - top < 60:
+                return ""
+            os.makedirs(self.cover_dir, exist_ok=True)
+            name = hashlib.md5(card["key"].encode("utf-8", "ignore")).hexdigest() + ".jpg"
+            path = os.path.join(self.cover_dir, name)
+            if os.path.exists(path):
+                return path
+            img = ImageGrab.grab(bbox=(left, top, right, bottom), all_screens=True)
+            img.save(path, "JPEG", quality=85)
+            return path
+        except Exception as e:
+            self.cover_error = str(e)
+            return ""
     def _merge(self, cards, page):
         new = 0
         now = datetime.datetime.now().isoformat(timespec="seconds")
         for c in cards:
             key = c["key"]
             if key not in self.cards:
-                c["page"] = page
+                c["page"] = page + 1
+                c["cover_path"] = self._capture_cover(c)
                 c["first_seen"] = now
                 self.cards[key] = c
                 new += 1
@@ -380,9 +408,10 @@ def main():
     ap.add_argument("--no-scroll", action="store_true")
     ap.add_argument("--no-restore", action="store_true")
     ap.add_argument("--cap", action="store_true")
+    ap.add_argument("--no-covers", action="store_true")
     a = ap.parse_args()
     col = Collector(a.out, wait=a.wait, max_pages=a.max_pages,
-                    scroll=not a.no_scroll, restore=not a.no_restore, cap=a.cap)
+                    scroll=not a.no_scroll, restore=not a.no_restore, cap=a.cap, capture_covers=not a.no_covers)
 
     def on_step(step, snap):
         print("page={page} tree={tree} unique={unique} new={new} y={min_y}..{max_y}".format(**step))
