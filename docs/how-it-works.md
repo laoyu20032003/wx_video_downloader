@@ -109,7 +109,7 @@ mitmdump -q -p 8898 --set confdir=mitm -s capture.py
 
 `X-enclen` 取 HEAD 响应头；`< 1024` 或 `> 4MB` 就回退默认 131072（带 `Range` 的请求会把 `X-enclen` 回成本次范围长度，不能当依据）。
 
-### 3.5 解码校验里哪些"错误"不算错
+### 3.5.1 解码校验里哪些"错误"不算错
 
 `ffmpeg -f null` 会对 B 帧的 DTS 顺序报 `non monotonically increasing dts to muxer in stream 0`，那是 **null muxer 的牢骚，不是文件损坏**。实测一条完好的 452 秒 / 13542 帧视频全片解码只有这 3 行，却因此被判"解码失败"，重试三次后放弃。现在 `non monotonically increasing dts` 与 `Application provided invalid` 两类消息不计入错误，只统计真正的读数据/解码错误。
 
@@ -117,9 +117,35 @@ mitmdump -q -p 8898 --set confdir=mitm -s capture.py
 
 运行日志写在 `work\run.log`（自己追加，不用 `Start-Transcript`——实测那份日志真实运行时一直是 0 字节）。
 
+### 3.6 独立 viewer：不靠代理的跨层绑定
+
+`wx-gui` 走的是“代理拿 URL → 内存取头”的链路；`wx-viewer` 则完全不依赖 mitmproxy/HUD：
+
+```text
+UIA 卡片（封面/文案/时长/点赞，没有 ID）
+        +
+renderer 堆（oid / index / vid_len / like / 邻近 20302 URL）
+        +
+主进程（oid ↔ 完整签名 URL）
+        ↓
+resolve：oid → index → 时长 → 点赞
+        ↓
+ready / pending
+```
+
+它的关键结论：
+
+- **oid 是稳定主键**；`encfilekey`、`m`、`token` 都会轮换；
+- UIA 只提供文案/时长/点赞/网格位置，不能单独对到流；
+- 完整 URL 必须来自主进程原始配对，去掉 `sign/basedata` 重建会 400；
+- hover **8 秒**即可让预览解码、明文头常驻，不必点开播放器；
+- 对不上/歧义的卡片保持 `pending`，不按流量顺序猜。
+
+详见 [card-url-binding.md](card-url-binding.md) 和 [../viewer/README.md](../viewer/README.md)。
+
 ## 4. 为什么要“先播放一次”
 
-内存里只会保留**最近播放过**的视频头。没有播放过，就没有明文头可用——这也是当前唯一无法绕开的限制。批量下载需要额外的界面自动化。
+内存里只会保留**最近播放/预览过**的视频头。没有真正解码过，就没有明文头可用——这也是当前唯一无法绕开的限制。`wx-viewer` 用 hover 8 秒满足这个条件；逐行点击下载，全自动批量仍不在当前范围。
 
 ## 5. 兼容性排查思路
 

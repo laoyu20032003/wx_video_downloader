@@ -273,6 +273,11 @@ pythonw viewer\wx_viewer.py
 
 细节见 [docs/how-it-works.md](docs/how-it-works.md)。
 
+`wx-viewer` 的跨层绑定、oid/URL 对齐和失败边界见：
+
+- [docs/card-url-binding.md](docs/card-url-binding.md)
+- [docs/association-research.md](docs/association-research.md)（豆包调研原始记录，含失败方向）
+
 Hover 行为排查：运行 `pwsh -File tools\hover-diag.ps1`，报告写到 `work\hover-diag.md`；说明见 [docs/hover-diagnostics.md](docs/hover-diagnostics.md)。
 
 已知问题、当前缓解方式和暂时无法解决的限制见 [docs/known-issues.md](docs/known-issues.md)。
