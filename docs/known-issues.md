@@ -501,6 +501,52 @@ CREATE_NO_WINDOW + STARTF_USESHOWWINDOW + SW_HIDE
 ```
 
 覆盖 `pwsh`、`curl`、`resolve`；`ffmpeg` 是其子进程，不再单独弹窗。
+## 13.2 为什么暂时去不掉 hover（non-hover 结论）
+
+豆包做过一轮完整的 non-hover 探索，结论是**应用层路线已逐项关闭**，详见 [non-hover.md](non-hover.md)。
+
+| 路线 | 结果 |
+|---|---|
+| 系统代理抓 feed cgi | 失败：cgi 走主进程直连长链，不走 WinINET 代理 |
+| renderer/主进程平铺字符串扫描 | 失败：只有字段名，值在 V8 指针后或原始响应里 |
+| CEF 调试端口 | 失败：无 `--remote-debugging-port` |
+| 本地数据库/IndexedDB | 失败：业务库 SQLCipher；缓存只有部分 videoCache 前缀/seed |
+| 本地拼 `encfilekey/m/token` | 失败：缺 `token/basedata/sign/svrbypass`，CDN 400 |
+| 右键菜单「播放」程序触发 | 可打开抽屉，但仍是逐卡桌面动作，不签发 URL |
+| 按 oid 直接唤起播放器 | 前端桥没有对应 action，外部无法 invoke |
+| 后台/多开播放器轮流解码 | 隐藏/非活动播放器会暂停，不产生明文头 |
+
+剩余未证伪的硬路只有：
+
+```text
+内存提取 MM 协议帧密钥 → Python 复放 pc_finder* cgi
+```
+
+成本高、协议会变、账号风险大，暂不作为近期目标。
+
+**实践结论**：当前继续用 hover 8 秒或播放窗口实际播放；不要反复尝试上述已关闭路线。
+
+### seed 自解密（备选，不是 non-hover）
+
+如果 IndexedDB/videoCache 里已经有：
+
+```text
+decodeKey / seed + 前 131072 字节密文
+```
+
+可以用 ISAAC64 解出明文头，替代“内存明文头”这一环。但它**不能替代密封 URL**：URL 仍要微信在场签发，未预取/未缓存的卡片也没有 seed。
+
+## 13.3 播放窗口后台/多开为什么不能稳定取流
+
+[player-flow-architecture.md](player-flow-architecture.md) 的结论：
+
+- 列表/关联/下一条在主 renderer store；
+- 播放器进程只拿当前条的 url + seed + 解码缓冲；
+- 多开窗口可以存在，但隐藏/非活动实例会暂停；
+- 暂停的实例不实际解码，内存里就没有新的明文头；
+- 因此不能靠“后台挂多个播放器轮流解码”批量取头。
+
+播放窗口自动下载（`wx-gui`）仍然有效，但前提是窗口实际可见/正在播放。
 ## 14. 目前无法可靠解决的问题
 
 1. **腾讯服务端限流**  

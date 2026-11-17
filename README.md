@@ -1,4 +1,4 @@
-﻿# wx_video_downloader
+# wx_video_downloader
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -234,7 +234,8 @@ pythonw viewer\wx_viewer.py
 - `pending` 点击后可能需要 1–2 分钟，因为它要重新扫 renderer 和主进程；
 - 同一时间只允许一个任务：hover 光标、滚动位置、明文头缓存都是全局的；
 - 163 是「原创声明数」，不是作品总数；以列表实际数量为准；
-- 不启动监听时，URL 来自主进程完整配对；如果主进程还没有该视频记录，会保持 `pending`。
+- 不启动监听时，URL 来自主进程完整配对；如果主进程还没有该视频记录，会保持 `pending`；
+- **暂时去不掉 hover**：应用层的离线/non-hover 入口已逐项实测关闭，当前仍需微信在场 hover 或播放；详见 [docs/non-hover.md](docs/non-hover.md)。
 
 ### 依赖
 
@@ -280,6 +281,8 @@ pythonw viewer\wx_viewer.py
 
 - [docs/card-url-binding.md](docs/card-url-binding.md)
 - [docs/association-research.md](docs/association-research.md)（豆包调研原始记录，含失败方向）
+- [docs/non-hover.md](docs/non-hover.md)（去掉 hover 的探索与关闭原因）
+- [docs/player-flow-architecture.md](docs/player-flow-architecture.md)（播放窗口/预加载架构）
 
 Hover 行为排查：运行 `pwsh -File tools\hover-diag.ps1`，报告写到 `work\hover-diag.md`；说明见 [docs/hover-diagnostics.md](docs/hover-diagnostics.md)。
 
@@ -338,6 +341,7 @@ Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Setti
 - `wx-save` 的 F8 只在**作者主页卡片页**有效；视频播放窗口不保存，请用 `wx-dl` 自动模式；
 - 已下载徽标覆盖层目前只铺主屏，微信在副屏时徽标位置会不对；
 - `wx-viewer` 目前是逐行手动下载、单任务；全自动批量下载仍不在当前范围；
+- **不能靠后台/多开播放窗口稳定取流**：隐藏/非活动播放器会暂停解码，明文头不驻留；播放窗口自动下载仍要求窗口实际可见/播放。详见 [docs/player-flow-architecture.md](docs/player-flow-architecture.md)；
 - 微信改版可能导致内存中的结构变化，需要更新 `MemScan.cs` 的识别逻辑。
 
 ## 免责声明

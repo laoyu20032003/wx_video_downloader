@@ -1,4 +1,4 @@
-﻿# wx-viewer（本项目版本）
+# wx-viewer（本项目版本）
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -61,6 +61,8 @@ duration 82.33s
 - hover 8 秒是必要条件，下载前不能刷新页面/切换太远；
 - 明文头是有限缓存，新头会挤掉旧头；
 - 同一时间只允许一个下载任务（hover/滚轮/明文头都是全局状态）；
+- **hover 暂时不可去掉**：non-hover 的应用层路线已实测关闭；详见 [docs/non-hover.md](../docs/non-hover.md)；
+- 不能靠后台/多开播放窗口稳定取明文头；详见 [docs/player-flow-architecture.md](../docs/player-flow-architecture.md)；
 - 窗口缩放后按 `uia_key` 重新定位，不依赖旧 rect；
 - 图片/图文/直播回放不是普通视频。
 
