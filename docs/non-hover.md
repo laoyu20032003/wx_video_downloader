@@ -416,6 +416,34 @@ hover/播放时换取的 CDN 下载地址，参数归类见 `card-url-binding.md
 - 二维码：前端本地 qrcode 渲染，内容是 `https://channels.weixin.qq.com/mobile/commonFinderJsApi.html?api=openFinderView&extInfo=<JSON {action:"openFinderFeed", feedID:dynamicExportId, notGetReleatedList:1, commentScene, popWebView:1, feedEnterActionType}>`；原生 scheme 为 `weixin://biz/finder/openFinderFeed/<encodeURIComponent({exportId,actionType})>`。**二维码只携带回跳导出 id，不含流地址/密钥**；扫码在微信会话内打开，等价于回到 MM 授权链路。
 - 边界：该入口是「单条分享」视角，不能枚举某作者作品列表；匿名响应连作者 username 都不给。公开 H5 路线对本项目的价值仅限于：按分享短链补标题/封面/点赞文案做登记，**不能绕过 hover/在场授权拿到 20302 流**。
 
+#### 2B.7.1 更正：Windows 微信内链是真实播放闭环（用户实测，2026-11-17）
+
+外部浏览器（Chrome/Edge）打开 `/sph` 时看到的是二维码和“长按扫码前往微信观看”，这是
+**无微信 UA / 无 WeixinJSBridge** 的分支；不能据此判定 Windows 微信不能播放。
+
+用户实测的 Windows 闭环：
+
+```text
+/sph 短链
+→ 粘贴到 Windows 微信聊天窗口
+→ 微信把 URL 识别成可点击链接
+→ 点击链接
+→ 微信内嵌浏览器加载 /sph
+→ 检测到 WeChat UA，走 WeixinJSBridge
+→ openFinderView({action:"openFinderFeed", feedID:...})
+→ 唤起微信原生视频号播放器并播放
+```
+
+因此：
+
+- **Windows 微信内可以播放 `/sph` 分享链接**，这是一个真实闭环；
+- 外部 Chrome 仍是二维码页，不能播放；
+- 播放链路仍走微信会话，**不等于**能拿到 20302 密封 URL；
+- 要下载仍需在播放后从主进程/内存取 `oid ↔ 完整 URL` 和明文头；
+- 每条视频需要各自的分享链接（`FinderGetFeedH5Url` / cmdid 22299），列表材料里没有 shortUri；
+- 仍是逐条、占桌面、需要粘贴/点击，不是离线批量 non-hover。
+
+**对本项目的价值**：可以作为一种“按分享链接精确激活某条视频”的备选入口，尤其适合卡片网格里找不到、或 hover 不稳定的单条视频；但它不解决批量链接获取和密封 URL 的离线生成。
 #### 2B.8 shortUri 能否作为「流 ↔ 卡片」配对主键（假设评估，2026-11-17）
 
 假设：既然扫码能在微信内拉起播放，说明存在 `shortUri + 用户信息 → 视频` 的半公开接口；若 shortUri 能和取流 URL 对应，就能解决播放窗口与流错配。逐条实证后判定：**shortUri 不是本项目配对问题的解歧义主键**。

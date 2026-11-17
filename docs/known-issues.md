@@ -1,4 +1,4 @@
-﻿# 已知问题与解决方案
+# 已知问题与解决方案
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -525,6 +525,16 @@ CREATE_NO_WINDOW + STARTF_USESHOWWINDOW + SW_HIDE
 成本高、协议会变、账号风险大，暂不作为近期目标。
 
 **实践结论**：当前继续用 hover 8 秒或播放窗口实际播放；不要反复尝试上述已关闭路线。
+
+**例外：Windows 微信里的 `/sph` 分享链接**
+
+外部 Chrome 打开 `/sph` 只显示二维码，但把同一链接粘贴到 Windows 微信聊天窗口并点击，微信内嵌浏览器会走 `WeixinJSBridge.openFinderView`，可以唤起原生播放器播放。这是真实的单条播放闭环，但：
+
+- 每条视频要单独拿分享链接（`FinderGetFeedH5Url` / cmdid 22299）；
+- 仍要前台粘贴/点击，不能离线批量；
+- 播放后仍要从内存取 20302 URL 和明文头，链接本身不含这些。
+
+详见 [non-hover.md](non-hover.md) §2B.7.1 和 [player-flow-architecture.md](player-flow-architecture.md) §9。
 
 ### seed 自解密（备选，不是 non-hover）
 
