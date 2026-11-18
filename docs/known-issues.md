@@ -1,4 +1,4 @@
-# 已知问题与解决方案
+﻿# 已知问题与解决方案
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -659,6 +659,107 @@ task.state = url_found → header_ready → downloading → verified
    - 任务 `header_ready` 后才切；
    - 其他同时出现的流只入队，不参与切条判断。
 4. 要做真正并行，必须让每个任务拥有自己的 header 快照，不能共享“当前内存头”。
+
+## 13.6 2026-11-18 进展：播放器“当前条”绑定仍不可靠
+
+豆包新增了两类探针：
+
+- `b-feed-extract.py`：从 renderer 堆同时按 UTF-8/UTF-16 抽 feed 块，得到 `oid/昵称/文案/media url`，一次快照 91 条；
+- `b-player-dump.py`：用播放窗 UIA 的进度文本、主文案、作者回表 feed 表，判断当前条。
+
+实测结果：
+
+```text
+windows: 3
+current: 本轮快照 unmatched / no-progress（也出现过 matched，但不稳定）
+oid: None
+```
+
+原因：
+
+- feed 表是缓存集合，当前刚切到的条目可能还没入堆/已被换页；
+- UIA 播放窗不带 oid；
+- 两个播放窗的 feed 块可能混在同一 renderer 堆；
+- 只能靠文案/作者/顺序回表，仍有歧义。
+
+所以：
+
+```text
+“当前播放的是哪条”目前还不能作为可靠的切条信号。
+```
+
+这与 13.4/13.5 的结论一致：没有当前 oid 绑定，就不能用某个流的状态切播放器。
+
+## 13.7 聊天转发卡片：oid + 完整 URL，但不是作者主页列表
+
+`mem-feed.py` 从主进程内存的聊天消息 XML 中解析到：
+
+```xml
+<finderFeed>
+  <objectId>15045243550007823056</objectId>
+  <objectNonceId>...</objectNonceId>
+  <desc>...</desc>
+  <mediaList>
+    <media>
+      <url>.../20302/stodownload?encfilekey=...&amp;m=...</url>
+      ...
+    </media>
+  </mediaList>
+</finderFeed>
+```
+
+价值：
+
+- 转发卡片自包含 `oid + nonce + 完整 20302 URL`；
+- 点击卡片走原生 `openFinderFeed`，是精确的单条播放入口；
+- 不需要先 hover 卡片网格。
+
+边界：
+
+- 只覆盖**聊天里已转发的卡片**，不是作者主页的完整列表；
+- 卡片 XML 只有 URL，没有 `decodeKey/seed`；要明文头仍需实际播放/解码；
+- 历史转发残留不代表当前主页；不能拿它批量枚举作者作品。
+
+## 13.8 2026-11-18 突破：seed 自解密（豆包已闭环，本项目尚未接入）
+
+豆包在 `association-research.md` §16.43 记录了一个重要进展：
+
+```text
+kvReport / callRemoteMethod 上报串
+→ <oid>,<stodownload URL>,<decodeKey 6–12 位>,14,0,...
+→ decodeKey 作为 ISAAC64 seed
+→ 解密前 131072 字节
+→ 不依赖 WeChatAppEx 明文头
+```
+
+实测两条端到端成功：
+
+```text
+oid 15050086854154853712  seed 979861605  3,566,401 bytes / 40.22s
+oid 15052259438420827465  seed 1575101769 1,499,310 bytes / 20.81s
+```
+
+意义：
+
+- 明文头缺失时，seed 自解密可以作为兜底；
+- 不再需要“内存里恰好有当前视频的头”；
+- 仍需要完整 20302 URL（来自主进程/卡片/report 串）；
+- 未取流/未上报的 pending 卡片仍然没有 seed；
+- 同一 oid 偶发两条 seed，需要校验裁决。
+
+当前本项目：
+
+```text
+wx-dl.ps1 仍走“扫描内存明文头 + 拼接”路线
+尚未接入 seed / ISAAC64 分支
+```
+
+所以这条只能算豆包侧已验证的备选方案；要落地到本仓库，需要：
+
+1. 增加 `decodeKey/seed` 提取（report 串扫描）；
+2. `wx-dl` 增加 `-Seed` 分支；
+3. 用 ftyp/moov/mdat + ffprobe/ffmpeg 校验；
+4. 处理多 seed 候选。
 
 ## 14. 目前无法可靠解决的问题
 

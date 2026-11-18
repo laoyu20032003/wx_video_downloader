@@ -2,14 +2,14 @@
 
 > **DeepSeek Harness** · 文档整理与验证
 >
-> **来源**：豆包本地探索记录（2026-11-17，原文件 `D:\Doubao\wx_video_downloader\docs\player-flow-architecture.md`）。
+> **来源**：豆包本地探索记录（2026-11-18 更新，原文件 `D:\Doubao\wx_video_downloader\docs\player-flow-architecture.md`）。
 > 豆包 package/探针不随本仓库提交。
 >
-> 本文解释播放窗口（沉浸连播抽屉）的列表/预加载/播放器分工。
-> 结论：列表和关联在主 renderer store；播放器进程只拿当前条的 url + seed + 明文头；
-> 后台/隐藏/非活动播放器会暂停解码，不能靠“多开后台播放器”稳定取明文头。
->
-> 与当前 `wx-viewer` 的 hover 8 秒路线互补；不改变“密封 URL 仍需微信在场签发”的边界。
+> 本次新增重点：
+> - 8.6 聊天短链真实点击现场；9 player feed dump；10 聊天转发卡片 XML。
+> - `b-feed-extract` 双编码抽出 91 条 feed（oid/desc/url）；`b-player-dump` 用 UIA 进度/文案回表。
+> - 实测当前条回表会出现 `matched` 也会出现 `unmatched`；feed/事件都是某一刻快照，不能当实时指针，当前 oid 尚不能稳定拿到。
+> - 聊天卡片 XML 自带 oid + 完整 20302 URL，但只覆盖转发卡片，不是作者主页列表，也没有 decodeKey。
 
 > 2026-11-17，基于视频号前端包 `wxalite28e098851253e34f4777f7ca024236fd`（`main/174/dist/pkg/`）静态 JS 阅读 + 既有内存实证。
 > 关联：`association-research.md` §3.2（xplayer 瘦 slave）、`card-url-binding.md`、`non-hover.md` §2A.4/§2B。
@@ -109,6 +109,9 @@
 
 冷分享/外部链接进入 `/feed` 路由时，URL 上只有少量标识：`oid`(id)、`nid`(objectNonceId 前缀)、`eid`、`req_time`、`fpid`、`foid`、`from_access_id`、`sessionBuffer`、`fromSubPage`、`muted`、`membership`。前端 `/feed` 页挂载（`onMounted → Ie()`）只做两件事：按 oid/nid/eid 重置评论详情；若 `fromSubPage` 属于收藏/点赞/作者页，则加载对应交互列表。**页面本身不按 oid 重新拉取单条 Feed 对象**——同会话进入时对象来自总线 `__obj`，冷启动对象由原生层/分享卡片在打开 webview 前注入或在 MM 会话内解析。
 
+**原生分享卡片的生成方式（2026-11-17 静态普查）**：聊天里能直接拉起原生播放器的 finder 卡片，不是由分享链接生成的，而是由抽屉/流 store 里的整条 Feed 对象经桥动作 `sendFinderMessage`（`appid:"finderFeed"`）交给原生层写进会话。序列化器（chunks-common 模块 56590 `l`）字段：`objectId=e.id(oid)`、`objectNonceId`、`feedType=mediaType`、`nickname/username/avatar`、`desc`、`mediaCount`、`localId:"0"`、`mediaList=media.map(...)`、`authInfo`、`link`。即卡片锚点主键仍是 oid + nonceId，材料随卡片同体携带；该桥调用只存在于 renderer 内部，无 CDP，外部 Python 无法代发。`sendFinderMessage` 另一处用于「问小微」转发给助手，同样基于当前 `flowCurrentFeed`。
+**实测结果（2026-11-18，用户亲测）**：短链接贴在聊天里点击，**确实拉起了独立的连续播放窗口（原生沉浸播放器）**，并非只开 H5 preview 页。即 MM 原生层识别该链接后在打开 H5 前拦截、路由到 finder 播放器（对应 §7.2 入口 2：聊天分享/外部链接冷启动）。待补抓：点击落地时 `/feed` 路由的 query（oid/nid/eid/exportId/shortUri 各取到哪个）、renderer store 里冷启动对象由原生层注入还是会话内解析；以及 22299 返回的 `feedH5Url` 是否就是 `weixin.qq.com/sph/<shortUri>` 短链本身（任务 #4）。
+
 ### 8.2 外部按 oid 唤起播放器：静态普查结论
 
 对全包 `WeixinJSBridge.invoke` / `lite.jsapi.invoke` 动作枚举（探针 `tools/probe-bridge-actions.py`）：
@@ -120,6 +123,22 @@
 - 这些桥调用只存在于 renderer 内部；无远程调试端口，外部 Python 无法直接 invoke（既有结论）。
 
 判定：**「拿到 card 信息后由我们按 oid 调起播放器」在前端静态面没有可用入口**；目前唯一实证可行的触发仍是 UIA 点击卡片（DSH 路线）或 hover 激活。即便能在会话内路由到某条 Feed，密封 ready URL 仍需服务端在场签发，离线造不出。
+
+**短链/scheme 唤起路径（2026-11-18 静态普查 + 用户实测）**：
+
+- 实测：短链接贴在聊天里点击，能拉起独立连续播放窗口（原生沉浸播放器），MM 原生层在打开 H5 前识别并拦截路由。
+- 预览 H5（`work/preview-js/`）里有两条交给原生播放器的通道：
+  - 桥动作 `openFinderView`，`extInfo` JSON：`{action:"openFinderFeed", feedID: dynamicExportId||eid||ft(id), notGetReleatedList:1, commentScene,...}`；
+  - OS scheme：`weixin://biz/finder/openFinderFeed/<encodeURIComponent("exportId=<exportId>&actionType=<h>&commentScene=...")>`；另有 `openFinderProfile` / `openFinderLive` 同族。
+- 注册表：`HKCU\Software\Classes\weixin` 与 `xweixin` 的 `shell\open\command` 均为 `C:\Program Files\Tencent\Weixin\Weixin.exe "%1"`，即 scheme 可由外部 `Start-Process` 交给 Weixin.exe，不经过聊天 UI。
+- **scheme 载荷锚点是 exportId（dynamicExportId/eid），不是 oid**；oid 只在桥 `openFinderView` 的 `feedID` 回退链 `ft(id)` 里出现，`ft` 转换语义未还原。28e MM finder 包内没有 oid→scheme/短链的本地拼装，列表模型也不下发 exportId/shortUri。
+- 待实证：① 外部直接 `Start-Process` 一个合法 `weixin://biz/finder/openFinderFeed/...` 是否被 Weixin.exe 接受并开窗（而非只在页内 `<a>.click()` 生效）；② 22299 响应里是否同时带回 exportId/dynamicExportId；③ 冷启动开窗后 `/feed` query 与 renderer store 对象的锚点字段。
+- **① 阶段性实测（2026-11-18 00:06）**：用留存样本 `dynamicExportId=export/UzFf...`（expiredTime 1794917771，已过期约 3.8h）按 `exportId=...&commentScene=39&entryScene=64&entryCardType=48` 编码构造 scheme，外部 `Start-Process` 交给 Weixin.exe。结果：**scheme 被接收**——新起两个 `WeChatAppEx.exe --type=renderer`（product-id 1002，render-type 7，renderer-client-id 22/23）；但无可见顶层窗口（样本过期，错误/空 webview 未呈现）。scheme 能否对有效 exportId 开出可见播放器，需用新鲜链接重测。构造脚本 `tools/probe-scheme-build.py`，URI 留存 `work/scheme_test.txt`，前后窗口快照 `work/scheme_before.txt` / `scheme_after.txt`。
+- **① 新鲜样本复测（2026-11-18 00:10）**：短链 `https://weixin.qq.com/sph/AvjP3q1JQP`（作者「杠京-北京杠爷」，匿名 `get_feed_info` 取回有效 `dynamicExportId=export/UzFfBgAAxICmYDh4...`，expiredTime 1794939021，约 2h 有效；匿名响应仍无 oid/流地址）。重建 scheme 外部 `Start-Process`：
+  - 新起 renderer pid 50292（product-id 1002，render-type 7，client-id 25），但**无可见顶层播放窗口**；UIA 全树只有既有作者主页网格（434 条原创、prev-i 卡片），无 `video-player` 层、无抽屉评论项。
+  - 扫 50292 内存：只有 `/web/pages/feed` 路由模板串和 `openFinderView` 桥名（公共 bundle 代码），**无 exportId/oid/文案落地**；内存中出现原生报错串 `APIGetBrowserView is nullptr!`、`session is nullptr`。
+  - 判定：外部 scheme 唤起能拉起 finder renderer 进程，但**没能建立浏览器视图/会话**，feed 对象未注入；聊天内点击之所以能开窗，走的是会话内既有视图/桥上下文，外部 scheme 复放在原生会话层被卡住。脚本 `tools/probe-fresh-link.py`（匿名解析+建 scheme）、`tools/probe-renderer-route.py`（renderer 内存路由痕迹）；产物 `work/sph_fresh_raw.json`、`work/scheme_fresh.txt`、`work/uia_scheme_fresh.txt`、`work/scheme_fresh_before/after.txt`。
+  - 待办：抓一次聊天内真实点击的现场，对比它走的是 `openFinderView` 桥还是 scheme、挂在哪个既有 browser view、注入对象带哪些字段（任务 #4）。
 
 ### 8.3 多开窗口与单播互斥（用户观察复核）
 
@@ -150,18 +169,157 @@
 - 对下载路线的含义：即便后台能把抽屉点开，若后台不解码，现有内存明文头拼接路线仍落空；密封 ready URL 也需会话在场签发。**指望多开/挂后台轮流起播取流，与单播暂停行为冲突**；要明文头，对应 webview 必须处于活动/可见状态。
 - 边界：seed 自解密兜底（任务 #20）不依赖明文头，但前提仍是该前缀密文 + seed 记录已落 VC/IndexedDB；后台未预取的卡片同样没有这份材料。
 
-## 9. Windows 微信 `/sph` 分享链接闭环（用户实测补充）
+### 8.6 聊天内真实点击现场（2026-11-18 00:28 实测，任务 #4）
 
-外部 Chrome 打开 `/sph` 只显示二维码，是因为没有微信 UA/桥；Windows 微信聊天里点击同一个链接，会走内嵌浏览器 + `WeixinJSBridge.openFinderView`，可以唤起原生播放器并播放。
+触发方式：用户在微信聊天里点击唯一一条短链，原生连续播放抽屉直接弹出（右上角，标题栏「视频号」）。与 §8.2 外部 scheme 复测对照：**会话内点击能开窗，外部 scheme 卡在 `APIGetBrowserView/session nullptr`**，差别在于前者复用既有会话视图 + 桥上下文。
 
-这条闭环的价值：
+**现场进程/窗口（PID 重启后须重枚举）**
 
-- 可以用一条分享链接精确打开某条视频，绕过 UIA 卡片定位/hover；
-- 播放后仍可从主进程/内存取 `oid ↔ 完整 20302 URL` 和明文头，再交给 `wx-dl`。
+- 主进程 `Weixin.exe` pid 41832（Qt 主窗）；`WeChatAppEx.exe` 浏览器进程 pid 47640，下挂两个 Chrome widget：旧大 webview `10423776` (156,156,1596,909)，播放器窗 `11077882` (1170,224,1859,1031)。
+- 点击时新起 renderer：pid 18784、49356（`--wmpf-render-type=7`）；既有 45276/46992/52784/42520。store 列表落在 18784。
 
-边界：
+**播放器 UIA 暴露整条推荐列表（hwnd 11077882，共 113 后代）**
 
-- 每条视频需要自己的分享链接；列表响应里没有 shortUri，`FinderGetFeedH5Url`（cmdid 22299）要逐条原生调用；
-- 仍然需要 Windows 微信前台、粘贴/点击，不是离线批量；
-- 播放不等于拿到密封 URL；URL 仍需微信会话签发；
-- 外部浏览器仍只显示二维码。
+每行一个 `feed-video video-js` 节点 + 标题(50020) + 头像/账号(50006/50020) + 操作项计数；纵向顺序即播放顺序（ended → playing → 预加载 next）：
+
+| 序 | 播放态 | oid | 账号 | 标题/文案 | 计数（喜欢/分享/推荐/评论） |
+|---|---|---|---|---|---|
+| 1 | vjs-ended | `1503937447215313992` | 杠京-北京杠爷 | 新到货的机器人朋友！#公园健身 #核心力量 | 1806 / 840 / 850 / 155 |
+| 2 | vjs-playing | `1505584850762511390` | 拾光-留声 | 《我爱五指山，我爱万泉河》作词:郑南 作曲:刘长安 演唱:牟炫甫 | 8178 / 8681 / 5590 / 2427 |
+| 3 | vjs-paused（下一条） | `1505404054950557090` | 七哥档案 | 【第二集】自认为天衣无缝 三天就暴露身份 \| 廖永雄伏法记② #故事#睡前故事#真实事件#奇闻奇事#社会百态 | 4.9万 / 2.5万 / 1.7万 / 2075 |
+
+- **UIA 节点不带 oid / exportId / nonceId**，只有文案、矩形、计数；身份主键在 renderer store 堆里，需内存侧按文案/顺序回表。三行 oid 均已用堆上下文回表（见下）。
+
+**内存侧绑定（pid 18784）**
+
+- store 堆内 25 条 `export/UzFf...` exportId 与若干 19 位 oid；点击的第 1 条已对上：堆内日志串 `[更新 feed]开始重拉 feed 1503937447215313992` 紧邻文案「新到货的机器人朋友！」→ **点击视频 oid = `1503937447215313992`**（作者杠爷）。
+- 桥调用构造从 pid 52784 utf-16 JS 片段还原：
+  `l===P.DEST_TYPE.CHANNELS?function(e,t){var n={action:"openFinderFeed",feedID:e.extBackComm.channels_info.id,nonceID:e.extBackComm.channels_info.nonce_id,f...}` … `return E.openFinderViewPromise({extInfo:n})}`。
+  即：聊天 channels 分享卡片 → 桥 `openFinderView`，`extInfo={action:"openFinderFeed", feedID: channels_info.id(oid), nonceID: channels_info.nonce_id, ...}`。
+- renderer 堆内**不留存** `sph/` 短链串（短链在注入前已解析成 oid/exportId）；**未见** media URL / decodeKey / seed（流仍交原生 xplayer/主进程，与既有结论一致）；exportId 以独立 V8 字符串存放，与字段标签不相邻，按标签正则取不到。
+
+**nonceId（objectNonceId）回表（2026-11-18 补，pid 18784 堆探针）**
+
+- 前端模型：`this.id=e.id, this.objectNonceId=e.objectNonceId||""`；形态 `<nonce前缀>_<type>_<scene>_..._<session uuid>`；路由取 `split("_")[0]` 后经 `G()` 编码成 query 的 `nid`。
+- 三条 oid 回表结果（完整值见 `work/player_chat_bind.json`）：
+
+| 序 | oid | nonce 前缀 | 完整 objectNonceId | 置信度 |
+|---|---|---|---|---|
+| 1 | `1503937447215313992` | `9490651182817725983` | `9490651182817725983_0_141_0_0` | 中（短形态，无会话 uuid；scene 段 0，聊天注入源） |
+| 2 | `1505584850762511390` | `17474338491405244932` | `17474338491405244932_4_141_84_64_1794932788074740_a3cb3988-e2a3-11f1-b038-8f33ead`（uuid 尾被堆窗口截断） | 高 |
+| 3 | `1505404054950557090` | `5189434392828033035` | `5189434392828033035_4_141_84_64_1794932788074740_a3cb3988-e2a3-11f1-b038-8f33eada5ac9` | 高 |
+
+- 第 2/3 条共享同一会话 uuid `a3cb3988-e2a3-11f1-b038-8f33eada5ac9`（同一抽屉推荐队列）。
+- **原生解码记录不带 nonce**：`probe-nonce-decode.py` 解邻近 base64 JSON（ele_info/session_buffer）只含 `object_id`，无 `object_nonce_id`/`objectNonceId` 字段；nonce 只存在于 V8 JS 堆。V8 属性名与值分存，按堆邻近度配对，同队列兄弟共享 uuid 段。
+- **`G()` 已还原并实证（2026-11-18）**：webpack 模块 57569（store-common.js）导出 `G`(编码 `a`) / `n`(解码 `c`)；大整数模块 45021 为 64 位 low/high BN，`toBytes()` 无参走 BE、固定 8 字节；base64 字符表标准 `A-Za-z0-9+/`；模块 19411 `_j`/`hN` 做 base64url 互转。
+  - 编码：十进制串 → int → 8 字节大端 → 标准 base64 → `+`→`-`、`/`→`_` → 去填充 `=`。
+  - 解码：`-`→`+`、`_`→`/` → 补 `=` 到 4 倍数 → base64 解码 → 8 字节大端 → 十进制串。
+  - 实证：pid 46992 堆内 3 条已求值路由（6 个 oid/nid 令牌）回算全部 MATCH，样本见 `work/route_token_samples.json`；Python 实现 `tools/oid_codec.py`（`encode_id`/`decode_id`）。
+  - 注意：该变换只服务前端 `/feed` 路由 query；**不等于** scheme/短链锚点，scheme 载荷仍是 exportId（见 §8.3）。
+
+**待闭环**
+
+- 抓一次 feed cgi 原始响应，确认 exportId ↔ oid ↔ 标题/nonceId 映射（任务 #4）。
+- 区分「原生分享卡片点击」与「纯 H5 短链点击」是否走同一条 `openFinderView/openFinderFeed` 桥。
+
+**本次产物**：`tools/probe-feed-anchor.py`（路由/oid/exportId/短链/流地址/seed 锚点扫描）、`tools/probe-feed-context.py`（按中文文案抓周边堆上下文回表 oid）、`tools/probe-uia-hwnd.py`（按句柄导 UIA）、`tools/probe-nonce-mem.py`（按 oid/标签抓堆内 nonce 形态串）、`tools/probe-nonce-decode.py`（解 base64 JSON 验证原生记录是否带 nonce）、`tools/oid_codec.py`（G/n 编解码 Python 实现）、`tools/probe-g-module.py`（webpack 导出定位）、`tools/probe-route-token.py`（堆内已求值路由令牌提取解码）；`work/feed_anchor_now.json`、`work/feed_context.txt`、`work/feed_context2.txt`、`work/player_uia.txt`、`work/player_now.png`、`work/player_chat_bind.json`、`work/nonce_mem.json`、`work/nonce_decode.json`、`work/route_token_samples.json`。
+
+## 9. 播放器 feeds 列表 + 当前 feed dump（路线 B 落地版，2026-11-18）
+
+> 本节为可运行 dump 能力；**xplayer 深层反查（从解码句柄反推当前 oid）本阶段挂起**，见 §9.4。
+
+### 9.1 工具与产物
+
+- `tools/b-feed-extract.py`：从 WeChatAppEx renderer 堆抽 feed JSON 块，正则抽 `id(oid)/nickname/description/media url`，落 `work/feed_extract.json`；**合并写回**（只补全/追加，不覆盖旧缓存）。
+- `tools/b-player-dump.py`：在 feed 表基础上枚举微信顶层播放窗 UIA，锚定当前条目并分组，落 `work/player_dump.json`。用法 `python tools/b-player-dump.py [--scan]`（默认复用 `feed_extract.json`；`--scan` 重扫堆并合并）。
+
+### 9.2 feeds 列表来源
+
+- feed 对象在 renderer 堆里以两种镜像并存：**u8（UTF-8）** 与 **u16（UTF-16LE）**；扫描必须两种编码都解码，只扫 u8 会漏掉大部分块（实测只命中 1 条 → 双编码后 91 条）。
+- 块外层包装两种：列表响应 `{"BaseResponse":...,"object":[{"id":...},...]}`、单条响应 `{"BaseResponse":...,"object":{"id":...}}`；正则按 `"id":"<oid>","nickname":"...","object_desc":{"description":"..."` 匹配，不依赖前导 `{`。
+- 分组判据：同一堆内按 `nickname` 聚簇——单一作者 ≥3 条归**主页列表**，多作者混合归**推荐流**。
+- 块内 `media[0].url` 即 stodownload 流地址；`feed_extract.json` 每条含 `oid/nickname/desc/url/pids`。
+
+### 9.3 当前 feed 判定（UIA 实时锚点）
+
+堆块是缓存集合（历史/预载/残留混合，无"当前"标记），事件流又丢事件、混窗口、不记进度（见 `association-research.md` §16.52）。当前条目只能从**实时 UI 树**锚定：
+
+1. 顶层播放窗 UIA 文本序列里，第一条匹配 `^\d{1,2}:\d{2} / \d{1,2}:\d{2}$` 的进度文本为当前条进度；相邻卡片的进度在其后，已排除。
+2. 进度后第一条长度 >6 的长文本 = 主文案；后续命中 feed 表 nickname 的文本 = 作者。
+3. 回表配对：先按作者缩簇，再按文案前缀 12 字精确匹配，其次包含匹配；`matched` 取值 `desc-prefix / desc-contains / unmatched / no-progress`。
+4. 主页网格窗（无进度文本）判 `no-progress`，不当播放窗。
+
+### 9.4 局限与挂起声明
+
+- **缓存波动**：堆块随播放演进被回收/换页，当前刚切到的条目可能尚未入堆或已被挤出，回表 `unmatched`；此时 dump 仍保留 UIA 进度/主文案/作者供人工核对，不猜 oid。
+- **进度活性未采样**：本轮只取单次进度文本，未做二次采样判断播放中/暂停/播完；`x:xx / x:xx`（当前=总时长）即播完暂停态。
+- **多窗口归属**：两个播放窗的 feed 块可能混在同一 renderer 堆，分组靠 nickname 聚簇 + UIA 锚点；窗口↔renderer pid 的稳定绑定尚未固化。
+- **xplayer 挂起**：xplayer 进程是瘦 slave，只收当前条 url/seed/缓冲，不持列表与下一条 id（§1、§3.2）；从其解码句柄反推当前 feed oid 的深层反查本阶段**挂起**，不在本轮 dump 范围。
+- 事件流（`flowChangeFeed`/toFeedId/toFeedIndex）仅作辅助旁证，不能单独作为当前条目判据。
+
+## 10. 聊天转发卡片消息体形态与唤起路径（2026-11-18 实证）
+
+### 10.1 两种进会话的形态对照
+
+| 维度 | 原生转发卡片（带播放按钮的图片卡） | 纯短链消息 |
+|---|---|---|
+| 消息体内容 | 自包含对象：oid + nonceId + 文案 + 作者 + 头像 + 封面/缩略图 + 原画流地址 | 仅一个 URL 字符串 `https://weixin.qq.com/sph/<shortUri>` |
+| 本地序列化（主进程内存镜像） | `<appmsg>` XML 包裹 `<finderFeed>` 子元素（§10.2） | 纯文本链接；服务端回包才带 `object_id` + `feed_h5_url` |
+| 身份主键 | `objectId`(oid) 与 `objectNonceId` 同体 | 只有 shortUri；oid/nonceId 需服务端解析后才有 |
+| 材料 | 封面 20304 / 缩略图 20350 / 原画 20302 三档 URL 同体 | 无 |
+| 点击唤起 | 读消息体直接开抽屉（§10.3 路径 A） | 先拦截解析短链、再拉对象（路径 B） |
+
+### 10.2 卡片 XML 结构（主进程 41832 内存，`work/card_msg_feeds.json`，11 条）
+
+外层是微信消息 XML：`<msg> … <appmsg> … <appattach> … <finderFeed>…</finderFeed> … </appattach> … <fromusername>…</fromusername><appinfo>…</appinfo> </appmsg> </msg>`。内层 `<finderFeed>` 自包含字段：
+
+```xml
+<finderFeed>
+  <objectId><![CDATA[15045243550007823056]]></objectId>   <!-- oid，19 位 -->
+  <feedType>4</feedType>                                  <!-- 4=视频 -->
+  <nickname>杠京-北京杠爷</nickname>
+  <avatar>https://wx.qlogo.cn/finderhead/…</avatar>
+  <username>v2_060000231003…@finder</username>
+  <desc>今天是大爷专场，带领爷爷们用宫廷盘杠中的动作…</desc>
+  <mediaCount>1</mediaCount>
+  <objectNonceId>13381970339453068488_0_141_2_0_5217949285221794_b502e12e-…</objectNonceId>
+  <mediaList>
+    <media>
+      <url>…/20302/stodownload?encfilekey=6xyk…&amp;m=b6de6fa8…&amp;uzid=7a1ac</url>   <!-- 原画 -->
+      <coverUrl>…/20304/stodownload?encfilekey=2fG3…&amp;m=03bbf948…</coverUrl>      <!-- 封面 -->
+      <thumbUrl>…/20350/stodownload?encfilekey=2fG3…&amp;m=2e907896…</thumbUrl>      <!-- 缩略图 -->
+      <width>1080</width><height>1920</height>
+    </media>
+  </mediaList>
+</finderFeed>
+```
+
+- 标签值用 `<![CDATA[…]]>` 包裹，解析前需剥 CDATA；URL 内 `&` 转义为 `&amp;`，先反转义再取 query。
+- 实证 11 条均 `feedType=4`；`objectId`(oid) 与 `objectNonceId` 同体，第一条 oid `15045243550007823056` 与 renderer feed 表一致。
+- 桥序列化（前端 `sendFinderMessage`，§8.1）字段与 XML 对应：`objectId=e.id`、`objectNonceId`、`feedType=mediaType`、`nickname/username/avatar`、`desc`、`mediaCount`、`mediaList`、`authInfo`、`link`。
+
+### 10.3 唤起播放器路径对比
+
+**路径 A · 原生卡片（短）**
+1. 点击卡片 → 原生层直接读消息体 `finderFeed` / `extBackComm.channels_info`（已带 `id(oid)`、`nonce_id`、材料）。
+2. 桥 `openFinderView`，`extInfo={action:"openFinderFeed", feedID, nonceID, notGetReleatedList:1, …}`；`feedID` 优先 exportId，回退 oid（前端 47640 `case "openFinderFeed"`：`feedID→eid=`、`nonceID→nid=`，再 `openUrlWithExtraWebview` 开 `/web/pages/feed`）。
+3. 会话总线带整条 `__obj` Feed 注入抽屉，直接播放；无需短链解析、无需现场拉对象。
+
+**路径 B · 纯短链（长）**
+1. 点击链接 → MM 原生层拦截识别 `sph/<shortUri>`。
+2. 短链交服务端解析，换 `object_id`/exportId/对象；冷启动无 `__obj`。
+3. 进 `/feed` 页后按 oid/nid 拉单条对象，再由 `getRelatedList` 补相关推荐队列。
+- 外部 `Start-Process` scheme 复放在原生会话层卡住（`APIGetBrowserView/session nullptr`，§8.2）；会话内点击之所以能开窗，复用的是既有视图 + 桥上下文。
+
+**为什么卡片路径短**：卡片是**对象消息**，身份与材料在发送时就随消息落库；短链是**引用消息**，只留一个可解析指针，对象要在打开时现取。
+
+### 10.4 工具与产物
+
+- `tools/probe-card-msg.py`：扫主进程/appex 内存关键字（`<finderFeed>`/`channels_info`/`extBackComm`/`openFinderFeed`/`objectNonceId`/`sph/`/`objectId`）命中计数 + 上下文样本。
+- `tools/mem-feed.py --pid 41832 --out work/card_msg_feeds.json`：按 `<finderFeed>…</finderFeed>` 标签边界解析，抽 `objectId/feedType/nickname/desc/objectNonceId/username/avatar/media(url/coverUrl/thumbUrl 的 encfilekey/token/m/uzid/尺寸)`。
+
+### 10.5 局限
+
+- 卡片里的原画 `url` 仍是密封 `stodownload`，**XML 不带 decodeKey(seed)**；解密仍需取流上报补 seed（§2.3、任务 #20），不能凭卡片 URL 直接落盘明文。
+- 卡片消息落库为加密 SQLite（pysqlcipher3 未装，本轮未破）；上述 XML 是主进程内存镜像，不代表磁盘消息体字节序。
+- 内存卡片是历史转发残留，不随作者主页实时列表刷新（§14.2 负向结论）；本轮 11 条含跨会话/广告混合样本。

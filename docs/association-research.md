@@ -1,20 +1,19 @@
-﻿> **来源与状态**
+﻿# 标题 ↔ 视频流 关联关系排查记录
 
 > **DeepSeek Harness** · 文档整理与验证
 >
-> 本文导入自豆包的本地调研记录（原文件 `D:\Doubao\wx_video_downloader\docs\association-research.md`），保留当时的时间、PID、工具路径和失败方向，作为“为什么这样设计”的原始证据。
+> **来源**：豆包本地调研记录（2026-11-18 更新，原文件 `D:\Doubao\wx_video_downloader\docs\association-research.md`）。
+> 豆包 package/工具不随本仓库提交，仅本地保留。当前落地实现以 [card-url-binding.md](card-url-binding.md)、
+> [player-flow-architecture.md](player-flow-architecture.md) 和 [../viewer/README.md](../viewer/README.md) 为准。
 >
-> 豆包的完整 package/工具不随本仓库提交，仅本地保留；当前落地实现以
-> [card-url-binding.md](card-url-binding.md) 和 [../viewer/README.md](../viewer/README.md) 为准。
-> 文中旧工具名（`tools/main-pair.py`、`tools/mem-render.py`、`wx-viewer.py`）对应本仓库的
-> `viewer/main_pairs.py`、`viewer/mem_render.py`、`viewer/wx_viewer.py`。
-# 标题 ↔ 视频流 关联关系排查记录
+> 2026-11-18 的新增重点：kvReport 串直配实时 `decodeKey`，ISAAC64 自解密两条端到端成功；
+> 播放器“当前条 oid”仍无实时可靠指针（UIA 文案/进度 + feed 快照只到“某一刻”）。
 
 更新：2026-11-16
 适用：微信 4.2.0.13 / Windows / liteapp（RadiumWMPF）
 目的：解决"下载文件与视频信息（标题/文案/作者）不能准确对应"的问题。
 
-> 配套专题：`docs/card-url-binding.md` —— UIA 卡片 ↔ oid ↔ 流 URL 配对链路、主键判定、对齐算法与样例的结构化说明。
+> 配套专题：`docs/card-url-binding.md` —— UIA 卡片 ↔ oid ↔ 流 URL 配对链路、主键判定、对齐算法与样例的结构化说明；`docs/non-hover.md` —— 非 hover 取流（原生 feed cgi 复放 / 离线材料获取）探索方案与未知问题清单。
 
 ## 1. 背景与假设
 
@@ -49,6 +48,7 @@
 - 对 `stodownload` / `encfilekey` / `finder.video` / `:///.mp4` / `xplayer` / `pipe` 零命中，仅命中插件路径串。
 - 结论：播放器经句柄/IPC 接收流，自身不保留可解析的流标识（URL/键/标题都不在本进程）。
 - 对用户假设的判定：**"播放器进程里能直接读到它绑定的流 id/url"不成立**；绑定关系不落在播放器进程内存。
+- 补充（2026-11-17 静态逆向）：连播列表/索引/相关推荐队列都在 renderer 前端 store，原生播放器只收当前条 url+seed+前缀缓冲；详见 `docs/player-flow-architecture.md`。
 
 ### 3.3 网络服务（26600）与 renderer（26772 / 31312）——只持有请求/响应记录镜像
 - 完整 `stodownload` URL 与 DNS/传输日志在网络服务；renderer 26772/31312 也缓存了 URL 记录。
@@ -86,6 +86,7 @@ https://finder.video.qq.com/251/20302/stodownload?encfilekey=nLWUlAoVvywFBEjUaZk
 ```
 
 - feed 页 URL 带 `oid`（对象 id）、`nid`（节点 id）、`entrance_id`。
+- `oid/nid` 令牌编解码已还原（2026-11-18，见 player-flow-architecture §8.6）：十进制 → 64bit 大端 8 字节 → base64url 去填充；上例 `z8TcEpbTCTA` → `14971333033684306224`，`kuNcQgf4rpE` → `10584404987922132625`；Python 实现 `tools/oid_codec.py`。
 - 这是上层"对象标识"与"流 URL"在同一条请求记录里相邻出现的实证，但标题不在该记录内。
 
 ### 5.2 flows.log 里的接口分布（657 条，旧会话 10:47 落盘）
@@ -774,7 +775,7 @@ https://finder.video.qq.com/251/20302/stodownload?encfilekey=nLWUlAoVvywFBEjUaZk
 
 ### 16.35 参考只读项目 D:\GitHub\wx_video_downloader 的全量列表方案
 
-**只读参考，未写入该目录。** 其已归档原型（[archive/prototype-uia.md](archive/prototype-uia.md)）跑通了“完全列表”：
+**只读参考，未写入该目录。** 其 `prototype/` 已跑通“完全列表”：
 - `uia_paginate.py`：定位活动 `page-profile` → 读当前批次 click-box → 鼠标滚轮逐屏翻页 → 按 `时长|点赞|文案` 指纹增量合并 → 连续两页无新增停止 → 结束回顶。
 - 同账号“乖乖兔3311”实测：头部标注 **163 条原创内容**，顺序滚到底去重后 **330 张 / 33 页**。
 - **口径修正（推翻 §16.34 的 163 占位假设）**：163 是“原创声明且审核通过”的作品数，不等于主页作品总数；330 = 原创 + 未声明原创 + 图文/图片动态/直播回放等。不能拿 163 截断或预留空槽。
@@ -966,3 +967,214 @@ https://finder.video.qq.com/251/20302/stodownload?encfilekey=nLWUlAoVvywFBEjUaZk
 **本轮已落地的两处 viewer 修复**：
 1. 原因映射补全（`wx-viewer.py` DownloadWorker）：新增「内存无对应明文头」→「内存无明文头，需重播/重悬停」、「文件过短」→「流数据过短，重新悬停取流」；原「内存里没有候选明文头」分支合并到同一提示。
 2. 自动刷新默认关闭：全量内存扫描约 46s，远长于 15s 定时间隔，常开会持续后台重扫、挤占下载引擎；`auto_timer` 默认 unchecked、定时器不启动，需要时手动点「刷新」或勾选定时；`_toggle_auto` 仍可按需启停。启动时保留一次 `refresh_all()` 拉取当前快照。编译与 offscreen 实例化通过。
+
+### 16.38 引擎接入 seed(decodeKey) ISAAC64 自解密分支（任务 #20，2026-11-18）
+
+- **背景**：原引擎只走「内存明文头 + 明文尾拼接」，目标视频头不在内存时只能 FAILED；加密前缀需 seed(decodeKey) 用 ISAAC64 解密，不必依赖常驻明文头。
+- **落地**：
+  - 新增 `tools/isaac64.py`：从 `probe-isaac-verify.py` / Go `decrypt.go` 移植的 ISAAC64 实现，`decrypt_prefix(raw, seed, enclen)` 解密前缀、保留尾部明文。
+  - `tools/dl_engine.py` 新增 `--seed`（十进制 decodeKey）：提供 seed 时走 `fix_decrypt()` 分支——下载密文 → 解密前 enclen 字节 → 整文件 `gate_plain()` 结构闸门（ftyp/moov/mdat）→ 时长 → 前 3s/全片解码校验 → 落盘；不再扫内存明文头。无 seed 时保持原内存头拼接链路不变。
+  - `wx-viewer.py` `DownloadWorker` 增加 seed 字段，下载命令带 `--seed`；失败回执补「自解密结构闸门」→「seed 与本条不匹配或流已变」。
+- **种子来源链路**：`probe-xworker-full.py` 解析 VC IndexedDB → `videocache_records.json`（feedId/seed/encfilekey/m）→ `card-resolve.seed_for()` 按 oid→ek→m 回表 → resolved_cards 行 `seed/seed_src/video_key` → viewer → 引擎。
+- **验证状态**：ISAAC64 加解密对称性自测通过（前缀/尾部还原一致）；与 Go 实现算法对齐。**离线用 3 条真实磁盘加密分片 + VC seed 复验通过**：`work/offline_seed_test.py` 对 `finder_videoCache_966ce2a3/b751266f/ce08c13e` 解密前缀后，`gate_plain()` 均识别出 ftyp/moov/mdat，ffprobe 读出真实时长 194.95s / 82.29s / 208.20s；头部 `ftyp@4 moov@32 mdat@91384` 布局正确。分片是预缓冲段（数据截断），前 3s 解码在分片上无法走完属预期；真实引擎下完整密文解码才有完整数据。**尚未做带 live URL 的端到端落盘**。
+- **seed 留存观测（本轮现场）**：当前 UIA 页面两条 ready 视频的 oid 在两个 `weixin_xworker_0.indexeddb.leveldb`（`multitab_912688…`、`multitab_dc1e99b9…`）里都搜不到；VC 11 条记录全是早前视频，与当前卡片零重叠。**单纯 hover 不把 decodeKey 写进 VC videoCache 记录**；VC 记录对应真正预缓冲/播放过、落了磁盘分片的视频。种子命中依赖该卡片曾被播放/预取到产生分片。
+- **边界**：seed 不匹配或流已变时，解密后结构闸门会拒绝（无 ftyp/moov/mdat），不会落出坏文件；密封件 token/basedata/sign/svrbypass 本地仍不可造，分支只解决"已取到密文后的前缀解密"，不解决取流本身。
+
+### 16.39 seed 来源定位与实时种子缺口（2026-11-18 现场复验）
+
+- **前端种子来源（chunks-common.js / store-common.js 实证）**：VC videoCache 记录里的 `seed` 直接取自 feed 模型 `objectDesc.media[0].decodeKey`；归一化 media 对象为 `{width,height,url,urlToken,decodeKey,videoPlayLen,spec,hdrSpec,fullThumbUrl,thumbUrl}`，`decodeKey` 与流 url/urlToken 并列在同一 media 数组元素里。
+- **持久化边界（WAL 实证）**：正在播放/悬停的当前流**不会**把 decodeKey 写进 xworker IndexedDB 的 `finder:videoCache` 记录；WAL（`000033.log`）里 65 个 videoCache 键去重后仍是早先落过磁盘分片的那 11 条，createTime 对得上旧分片。VC 记录只覆盖"曾经被预缓冲/缓存到磁盘"的视频。
+- **实时种子位置**：当前 ready 卡片的原生 `ele_info.session_buffer` 解码 JSON 不含 decodeKey（字段仅 vid_len/cur_like_count/object_id/scid/…，另有 `secrete_data` 密文）；`decodeKey` 在 **V8 JS 堆的 feed media 模型对象**里，和 nonce 同属 JS 堆，原生缓冲区读不到。现有 `mem-render.py` 只从邻近内存抽 20302 URL，未提取 media.decodeKey。
+- **缺口与下一步**：要让自解密分支覆盖实时取流，需在 renderer 堆探针里解析含 `"decodeKey":"<十进制>"` 的 media 对象，按同一 blob/窗口邻近 object_id 回表 oid→decodeKey，与 URL 一起交给引擎；VC IndexedDB 只作为历史分片的兜底种子源。旧 VC 视频的 stodownload URL 已过期（svrnonce 为前一日 18:00/18:53），不能用于端到端复验。
+- **性能备注**：`mem-render.py` 全堆正则扫描单轮约 4 分钟（最大 renderer 880MB），是刷新按钮长时间禁用、CPU 占用高的主因；后续需做区域/正则裁剪或按需只扫目标 oid 周边。
+
+### 16.40 heap decodeKey 提取与回表落地（2026-11-18）
+
+- **探针**：`tools/probe-decodekey.py` 枚举 renderer（可选传 pid），两编码（u8/u16-le）扫堆，定位数据态 `decodeKey":"<6–12 位数字>"`，同块抽取 encfilekey/m/token/urlToken/完整 stodownload URL，去重落盘 `work/decodekey_map.json`。
+- **堆形态实证**：decodeKey 数据态在 u16 序列化串里，与 `urlToken`、媒体 URL、`m=`、`hy=`、`idx=`、`scene=2`、`basedata=` 同段；±700 字节窗口内**没有** 18–20 位 oid（oid 在 feed 对象另一处 `objectDesc.id`），不能同块直配。
+- **回表方式**：oid 不在同窗口，走既有索引三级匹配——heap blob 的 urlToken/token 前缀 24 → encfilekey → m，对 main_pairs/mem_model2；`decodeKey` 与 VC `seed` 同源（旧缓存片 6 条中 4 条按 seed 直接命中 VC feedId，实证 decodeKey 即 seed）。
+- **接线**：`card-resolve.py` 新增 heap 索引（tok/ek/m），`seed_for(oid,ek,m,token)` 优先取 heap 实时 decodeKey（`seed_src=heap-tok/ek/m`），回退 VC 历史种子（`vc-oid/ek/m`）；`refresh.py` 在 mem-render 之后插入「renderer heap decodeKey 提取」步骤。viewer/引擎透传 `--seed` 链路沿用 #20。
+- **待现场复验**：当前 dkmap 是旧缓存片，与当前 feed 快照对不上，3 条 ready 卡片 seed 仍为 None；需在同一轮新鲜 refresh（heap 与 main_pairs 同 feed）下验证 token 前缀命中，并跑一条带 live URL + seed 的端到端落盘。
+- **遗留性能**：heap 探针同样是全堆扫描，叠加 mem-render 后刷新耗时与 CPU 占用进一步上升，后续需按目标 oid/区域裁剪。
+
+### 16.41 现场复验：配对稳、明文头须靠播放、实时 seed 未入串（2026-11-18）
+
+- **配对**：主页「明菲形体舞蹈」16 张卡片，card-resolve 命中 16/16、点赞一致 16/16；oid↔卡片绑定这一层已稳。
+- **取流与 ready**：仅悬停两张后，main-pair 88 条，6 条拿到完整签名 URL（ready，含 sign/basedata），其余仍 pending。
+- **明文头路径实证（失败）**：对 ready 卡片 `15052259438420827465`（20s，密文 1,499,310 字节）跑 dl_engine，HEAD 正常，但 appex 常驻 11 个明文 MP4 头大小均与该文件不符，闸门早筛拒绝。结论：**hover/悬停只拉密文段，不会把明文 MP4 头留在内存**；明文头只在播放器真正解码播放后才出现。这与历史结论一致——要走明文头路径，必须先在播放窗把目标播几秒。
+- **实时 seed 未入串**：本轮 heap 探针仍只在 pid 46992 捞到 6 条旧缓存 JSON 副本；当前 feed 已取流视频的 decodeKey 没有以 `"decodeKey":"<数字>"` 序列化串形式出现。推断实时 V8 media 对象里 decodeKey 是 Smi/HeapNumber + 内部化属性名分离存储，现有正则按连续串匹配不到。#21 要继续，需解析 V8 对象布局（属性名指针→数值偏移），或换从已落磁盘分片/播放器解码缓冲侧取 seed。
+- **当前可下载路径**：仍是「播放器内播放目标几秒 → 内存明文头常驻 → 引擎按文件大小+时长+解码校验拼接头尾落盘」；seed 自解密分支作为明文头缺失时的兜底，待实时 seed 可取后闭环。
+
+### 16.42 播放后明文头仍不匹配、不落盘（2026-11-18 复验）
+
+- **现场**：播放器播放「中老年跳舞记不住动作」（oid 15050086854154853712，40s，密文 3,566,401 字节，ready 签名 URL）。
+- **明文头扫描结果**：appex 常驻 ftyp/moov/mdat 头仅出现在 pid 29460/25868，声明大小为 13.73MB、12.41MB×2、12.33MB、7.07MB、274KB、208KB、157KB 等，**无一条接近 3.57MB**；其余 appex 进程（含非 renderer 47640/53836）扫不到 ftyp 头。按文件大小早筛拒绝，FAILED。
+- **磁盘缓存**：播放后 finder tmp 目录未写新分片，最新 `finder_videoCache_*` 仍是 0:59 的旧片；当前播放不落 VC 缓存。
+- **结论**：单纯播放不会把可拼接的完整明文 MP4 头留在被扫描的 appex 进程内存，也不落盘；历史 #18 成功条件在当前版本/现场不可复现。明文头路线在本现场基本失效，下载闭环必须走 seed(decodeKey) 自解密，关键前置是把实时 decodeKey 从 V8 数值对象里读出来（#21）。
+- **待办**：解析 V8 HeapNumber/内部化属性名布局，定位 media[0].decodeKey 数值；或确认解码缓冲所在的真实进程（xplayer/slave）后再扫明文头。
+
+### 16.43 突破：kvReport 串直配实时 decodeKey，自解密端到端下载成功（2026-11-18）
+
+- **种子新位置（实证）**：实时 decodeKey 不在 media 对象的连续序列化串里，而在 `kvReport`/`callRemoteMethod` 的上报参数串中，形态为：
+  `<oid 18–20 位>,<stodownload URL>,<decodeKey 6–12 位>,14,0,[v1.2.61]...`
+  （u8 内存串，renderer 与非 renderer appex 进程都有；与 oid、URL 同串，可直接配对，无需 V8 对象布局解析、无需明文头、无需磁盘缓存。）
+- **探针落地**：`tools/probe-decodekey.py` 新增 `REPORT` 正则 `(\d{18,20}),https://[^\s,"]+,(\d{6,12}),`，扫全部 appex 进程；记录含 `oid/decodeKey/url/src=report|blob`。本轮现场捞到 90 条 report 直配 + 8 条旧 blob。
+- **回表**：`card-resolve.py` 建 `heap_by_oid` 直配索引（优先），再退 token 前缀/ek/m；seed_src=`heap-oid`。8 条 ready 卡片全部拿到 heap-oid seed。
+- **端到端复验（两条真实下载成功）**：
+  - oid 15050086854154853712，seed 979861605，成品 576×1024 HEVC+AAC，40.22s，3,566,401 字节；
+  - oid 15052259438420827465，seed 1575101769，成品 576×1024 HEVC+AAC，20.81s，1,499,310 字节。
+  引擎 `--seed` 走 ISAAC64 自解密闸门（ftyp/moov/mdat + ffprobe 时长 + ffmpeg 解码校验），两条均通过落盘到 `文档\视频号`。
+- **链路现状**：UIA 卡片 → oid 配对 → heap report 串取 seed → 引擎自解密落盘，主链路已闭环；不再依赖内存明文头与 VC 磁盘缓存。
+- **遗留**：① 同一 oid 偶有两条 seed（如 15050268045653253487：824919872/1252565222），当前先到先得，需按会话时间/校验闸门裁决；② 全堆扫描仍慢（perf 项）；③ pending 卡片未取流时无 URL/seed，需 hover 或播放触发上报后再刷新。
+
+### 16.44 「当前播放条目 oid」可获取性实测（2026-11-18）
+
+目标：在不依赖主页卡片配对的前提下，从活动播放器进程直接读出当前正在播的 oid。
+
+- **UIA 播放窗口：拿不到 oid（再次确认）**。抽屉树里只有标题/文案/点赞/评论/分享计数，无 18–20 位 object id；切播放模式后连卡片网格都读不到。
+- **kvReport 平面串：不能定位当前条目**。`probe-current-playing.py` 扫活动 renderer/host/xplayer，共 183 条候选；全是历史/预加载缓存，`currentTime` 基本为 0，不是播放位置标记，单靠串无法区分当前/上一条/预加载下一条。
+- **前端 store 有当前指针，但值在 V8 堆对象里**。活动 renderer（pid 50876）内存中存在 `flowCurrentFeed`、`flowCurrentFeedIndex`、`recentWatchedFeedCacheQueue`、`objectDesc`、`likeCount` 等属性名；平面串读到的是内部化属性名与 JS 源码，当前 feed 的值是 HeapObject，普通正则扫不到。
+- **xplayer 解码服务（pid 31576）**：无 stodownload URL / oid 串，是瘦 slave。
+- **活跃 xworker WAL（multitab_9126…/000033.log）**：记录为 leveldb/V8 序列化块，无明文当前 feed JSON；抽不到可用的 desc/时长/点赞对照。
+- **结论**：
+  - 路线 A（兜底，可先做）：播放器可见时用 UIA 读标题/时长/点赞，回查已配对卡片表（时长差 ≤3s、点赞一致）锁定 oid。主链路已把卡片配到 oid，缺的只是播放器界面字段读取与匹配。
+  - 路线 B（直取，成本高）：解 V8 堆对象布局，沿 `flowCurrentFeed` 引用读 `objectDesc.id`；或找该 feed 下发原生层/写缓存时的序列化副本。
+- **产物**：`tools/probe-current-playing.py`（按 PID 扫候选，落 `work/current_playing.json`）、`tools/inspect-wal.py`（WAL 缓存 feed 抽取，当前仅得序列化块）。
+
+### 16.45 路线 B 可行性实测：堆对象直取当前 oid（2026-11-18）
+
+**前端结构（静态读码，28e 包 670.js/398.js）**
+- feed 对象：`feed.id` = oid；`feed.objectDesc.description` 文案；`feed.objectDesc.mediaType`；`feed.objectDesc.media[0].decodeKey`；`feed.likeCount`。
+- 抽屉 store：`flowCurrentFeed`（当前 feed 对象）、`flowCurrentFeedIndex`（当前下标）、`flowTab`（列表）、`recentWatchedFeedCacheQueue`。桥调用一律用 `n.feed.id`（评论/分享/复制链接/上报）。
+
+**已封死的低成本通道（实证）**
+- **无 CDP/调试端口**：renderer 进程无任何 LISTEN 端口；主进程 41832 在 127.0.0.1 监听 14013/14019/14023/14022/14016，但 HTTP 访问全部 `RemoteDisconnected`，是原生 IPC 套接字，不是 DevTools；命令行无 `--inspect`/`--remote-debugging`/`--js-flags`。外部无法注入 JS 读 store。
+- **平面串拿不到当前指针**：report 串是历史/预加载缓存；内存里 feed 文案与 oid 分散在独立 V8 字符串对象中（dump 命中地址是对象头/指针，不是连续明文）；活跃 WAL 为 leveldb/V8 序列化块。
+- **xplayer 解码服务**：无 oid/URL 串，瘦 slave。
+
+**真正走 B 需要做的事（V8 堆遍历器）**
+1. 定位活动 renderer 的 V8 isolate 与指针压缩笼（46992 提交 696MB，RW 堆约 205MB）；
+2. 解 32 位压缩 tagged pointer，按 map 解析对象/数组/字符串/HeapNumber 布局；
+3. 从全局对象/响应式 store 根沿属性链走到 `flowCurrentFeed`，读其 `id`（或按 `flowCurrentFeedIndex` 从 `flowTab` 取）；
+4. 风险：无符号表、布局随版本变；微信有自检/还原，注入或常驻遍历易被还原。
+
+**结论**：B 不是读个串能解决的，属于 V8 堆逆向攻坚；在没有调试端口/符号的前提下，投入与维护成本显著高于路线 A（UIA 标题/时长/点赞回查已配对卡片表）。
+
+### 16.46 路线 B 侦察落地（2026-11-18）
+
+**环境基线**
+- 渲染/宿主：`WeChatAppEx.exe` 2.5.8.26066；内嵌引擎 `flue.dll` 238MB，Chromium 144.0.7559.236（现代 V8，指针压缩 + 沙箱）。
+- 承载抽屉 store 的进程：pid 46992（renderer，属性名命中 flowCurrentFeed×26 / flowCurrentFeedIndex×4 / recentWatchedFeedCacheQueue×4 / objectDesc×245 / flowTab×90）；47640（host，镜像）。其余 renderer/utility/gpu 无这些属性名。
+
+**前端对象模型（670.js/398.js）**
+- feed：`.id`=oid；`.objectDesc.description` 文案；`.objectDesc.mediaType`；`.objectDesc.media[0].decodeKey`；`.likeCount`。
+- store：`flowCurrentFeed`（当前 feed 对象）、`flowCurrentFeedIndex`（下标）、`flowTab`（列表）、`recentWatchedFeedCacheQueue`。桥调用全部取 `feed.id`。
+- 抽屉发出的事件：`flow-video`、`startPreviewCard`、`stopPreviewCard`、`videoPlayLen`；`videoPlayFinish`/`playId` 是原生上报层加的，不在抽屉 JS 里。
+
+**主进程（41832）内存实况**
+- 存的是上报/评论/事件/会话缓冲，不是一条干净的“当前 feed”结构。
+- 可解析的原生事件串：`flow-video,{"feedId":"<oid>","spec":{...},"tagId":"flow"},"videoPlayFinish",{"playId":"..."}`；`finder-profile-card,{"feedId":"<oid>","cols":n,"index":i,"stayTime":n},custom,{"customType":"startPreviewCard|stopPreviewCard"}`；以及 `object_uid_list:[{object_id:...}]`、评论 `comment_list`。
+- 这些缓冲是历史/预加载混合，无可靠“当前”标记；按事件类型/最近地址推断仍是启发式，错配类别与路线 A 同类。
+
+**堆字符串实况（46992）**
+- 数字串落在 RW 堆 `0x15fc0…`（prot 4/2）与缓存区 `0x3330…`；同一 oid 多处出现，多为 JSON 片段（`object_uid_list`、`object_id`、`finder_username`），富 feed 文案/点赞是独立 V8 字符串对象，与 oid 不连续。
+- 探针：`tools/b-recon.py`（按进程统计 store 属性名）、`tools/b-region-probe.py`（区域/原始字节命中）、`tools/b-digit-scan.py`（数字串按保护属性归类）、`tools/b-hexdump.py`、`tools/b-string-probe.py`、`tools/b-main-bridge.py`（主进程桥事件/派串抽取，落 `work/b_main_bridge.json`）。
+
+**B 的两条子路径**
+- **B1 主进程事件日志推断（低成本、启发式）**：解析 `flow-video`/previewCard 事件，按未配对 finish 的 feedId 推断当前。风险：和 A 同属“候选里猜”，预加载/上一条仍会混。
+- **B2 里程碑① 笼布局（46992 实测）**：超大私有保留区含 `0x033c00000000`、`0x043300000000`、`0x032a00000000`、`0x1c3000000000` 等 4GB 对齐槽（V8 sandbox + 压缩笼 + code cage 分层）。已提交 RW 簇分散在 4GB 槽 `0x7ffd`(282.8MB, 原生/栈)、`0x333`(61.4)、`0x150`(51.9)、`0x15fc`(51.3)、`0x28`(33.4)、`0x334`(14.1)、`0x1c34`(11.9) 等；已知 oid 明文落在 `0x15fc0…`/`0x33301…`。压缩笼具体基址与 map 类型表尚未标定，需在固定版本 flue.dll 上做对象头/SeqString 偏移对照。
+
+**B2 成本评估**：无调试端口、无符号、指针压缩 + 沙箱隔离，盲写堆遍历器需先标定 cage 基址、map 表、Tagged/SeqOneByteString/SeqTwoByteString/HeapNumber/FixedArray 偏移，任一版本升级即失效；属于多日级逆向工程，且微信小版本更新后需重新标定。
+
+### 16.48 用「list + current_index」索引当前 oid 的可行性（2026-11-18）
+
+**前端数据模型（chunks-common.js 模块 21295，Playlist 类，实证）**
+- 基类持有 `feeds[]`（feed 对象数组）；Playlist 子类字段：`currentFeedIndex`（整数，默认 0）、`currentTimeMap`（Map<feed, 时长>）、`limit=500`、`loopOnly`、`isRecommend`。
+- getter：`length = feeds.length`；`feedIdList = feeds.map(e=>e.id)`；`currentFeed = feeds[currentFeedIndex]`；`hasPrev/hasNext`。
+- 切下标：`setCurrentFeedIndex(e,t)`，临近末尾 3 条自动 `fetch()` 下一页；翻条 `goToPrevFlowFeed/goToNextFlowFeed` 只改 index。
+- store 挂载两个实例：`flowTab`（推荐/抽屉流）、`localFlowTab`（聊天短链/本地拉起）。`loadLocalPlaylist(playlist, feedId)`：`playlist.setCurrentFeedIndex(playlist.feeds.findIndex(f=>f.id===feedId)); localFlowTab.value=playlist`。
+
+**切条上报事件（现成 oid↔index 配对）**
+- `reportCustomBehavior("flowChangeFeed", {type, fromFeedId, fromFeedIndex, toFeedId, toFeedIndex, tagId})`，index 为 1-based。两条 setCurrentFeedIndex 路径都会发。
+- 含义：若该事件串在主进程/renderer 明文缓冲未轮转，可直接读出「当前 oid = toFeedId，下标 = toFeedIndex」，无需解析堆数组。
+
+**内存读取评估**
+- 模型上成立：list=feeds[]，index=currentFeedIndex，current=feeds[index]，与设想一致。
+- 比直取 current feed 对象少解析一层字段，但硬骨头不变：仍需在 V8 堆定位 Playlist/store 根、解 32 位压缩 tagged pointer、识别 FixedArray 与对象 map。index 是 Smi（小整数）好读，但「哪个 Smi 是 currentFeedIndex、哪个数组是 feeds」必须沿属性链走。
+- 平面串层面不成立：feeds 元素是压缩指针，oid 明文不连续排列；平面扫到的 oid 顺序 ≠ feeds 顺序，不能靠「扫 oid 列表 + 读 index 直接下标」。
+- 待验证（低成本、可证伪）：实时抓一次切条，确认 `flowChangeFeed`/`toFeedId`/`toFeedIndex` 是否落在明文缓冲、能否读出 oid+index；现有 `b_main_bridge.json`/`current_playing.json` 中这些字段计数均为 0（缓冲已轮转或事件被序列化）。
+
+### 16.49 突破：flowChangeFeed 明文事件流携带 oid + index + ctime（2026-11-18）
+
+**实测命中**：主进程 41832 与 renderer 46992 内存缓冲中存在明文 `flowChangeFeed` 事件，oid 与下标成对可读；探针 `tools/b-changefeed.py`，落 `work/b_changefeed.json`。
+
+**两种记录格式（同一事件在缓冲里成对出现）**
+1. JSON（下划线 key）：`ele_info:{type, from_feed_id, from_feed_index, to_feed_id, to_feed_index, tag_id}`，`action_info.custom_type=flowChangeFeed`；外层 `contextid`(UUID)、`ctime`(13 位 ms)、`entranceid`、`pageid=FinderHome`、`user_info.username`。
+2. 紧凑驼峰：`{type, fromFeedId, fromFeedIndex, toFeedId, toFeedIndex, tagId}`，`customType=flowChangeFeed`；前缀 `contextid,ctime_ms,ctime_ms,3,[FinderHome](custom~flowChangeFeed)(videoPlayFinish~flow-video~<上一条oid>)(videoPlayStart~flow-video~<当前oid>)`。
+   - 紧凑日志里当前条 = `videoPlayStart~flow-video~<oid>`，上一条 = `videoPlayFinish~...`。
+
+**字段语义**
+- `to_feed_id` / `toFeedId`：切换后当前条目 oid；`to_feed_index`：1-based 下标。
+- `type`：`auto-next`（自动连播）、`wheel`（滚轮）、`feed_lab`（进入/初始，from==to，index=1）。
+- `ctime`：13 位毫秒时间戳，可排序；`contextid`(UUID)：会话/页面实例，用于分组。
+- 同一会话内 index 单调 +1，from/to 链式相连（上一条 to = 下一条 from）。
+
+**判定当前条目（B1c 方案）**：按 `contextid` 分组，取 `ctime` 最大事件的 `to_feed_id`；`to_feed_index` 做链式一致性校验。无需读 V8 堆数组/对象布局。
+
+**时间戳实况（本轮基线）**：缓冲内最新事件 ctime=1794940438467（2026-11-18 02:33:58），采样时刻 13:07，相差约 10.5h，属历史残留；缓冲为环形，旧事件未被覆盖。**实时性待验证**：需在播放窗切一条后立即扫描，确认新 ctime 进入缓冲、`to_feed_id` 对应当前播放条。
+
+**待办**：① 实时切条验证事件刷新延迟与缓冲保留窗口；② 确认聊天短链拉起的独立播放器（localFlowTab）事件 `pageid`/`contextid` 是否独立、`to_feed_id` 是否同样记录；③ 归一化解析器输出 `work/current_feed.json`（按 ctime 排序）供 viewer 调用。
+
+**原型落地（2026-11-18 13:10）**：`tools/b-current.py` 归一化三形态事件，去重后按 ctime 升序，落 `work/current_feed.json`；用法 `python tools/b-current.py [pid ...]`（默认主进程 + 全部 renderer）。基线 73 条去重事件，链式还原正常（from=上一条 to，index +1）。最新候选：ctx `1538e8e7` `feed_lab` idx=1 oid `15053542021555685971`（12:38:13），该 oid 不在 `resolved_cards/decodekey_map/main_pairs/mem_model2` 任一回表——**事件流只负责定位当前 oid，seed/url 仍由 report 串补，两源互补**。缓冲保留窗口至少覆盖当天中午（距采样约 29 分钟仍在）。
+
+### 16.50 双窗口实测：事件链 ↔ UIA 窗口对应（2026-11-18 13:28）
+
+**进程/窗口拓扑**：host `47640` 下两个顶层窗口（Win32 标题均为"微信"，UIA 可见文案为视频号内容）；主窗口 `41832` 为账号主页卡片网格。renderer：`46992`(render-6, store)、`22200`(render-7, 1093MB)、`57476/13104/45276/52784/58268`(render-7)、`42520`(render-4)。
+
+**UIA 实测两个播放窗口当前内容**（`work/uia_win_text.py`）：
+- 窗口 A `(671,127,1951,934)` 推荐流：当前「找了陌生人上门喂猫遛狗，被家里机器人全程盘问…」作者 **我系二白**，3:06，10万+；背景推荐另有陈慎思、小宋同学机场志愿者。
+- 窗口 B `(1049,150,2329,957)` 乖乖兔3311 主页列表：当前「我们总要热爱点什么，去靠近光…」作者 **乖乖兔3311**，0:29，赞2；列表另有「炫逸舞厅…」0:51 赞8、「无病无灾…」0:14 赞65。
+- 主窗口 `41832`：乖乖兔3311，163 条原创内容网格。
+
+**事件链分组**（`work/group_chains.py`，按 from→to 并查集聚合，落 `work/play_lists.json`）：
+- 链15（最新在连播，13:27:18 auto-next）：idx1 `15051355211036106062`（明菲形体舞蹈 01:22 2.6万赞，= uia_cards index6）→ idx2 `15023453374292958240`(wheel) → idx3 `15056506843059718966`(auto-next 当前)。
+- 链14（静止，13:23:19）：idx1 `15054739469791005251` → idx4 `15054483428878256700` → idx5 `15053824208758573633`。
+- 链13（静止，13:21:06）：idx1 `15053690352862693947` → idx7 `15053542021555685971`。
+
+**未闭合点**：事件链 oid 与当前 UIA 文案窗口尚未一一对应；当前在播两条（我系二白、乖乖兔「靠近光」）oid 不在现有回表，链15 最新 oid `15056506843059718966` 也未配到 UIA 文案。闭合方式：① 对当前在播条目触发一次取流/hover，让 report 串或堆 description 补齐 oid↔标题；② renderer 堆按 oid 邻近提取 `objectDesc.description`。`contextid` 会跨进程/跨格式漂移，不能当窗口唯一键；窗口归属应以 from→to 连通链 + renderer pid 为准。
+
+### 16.51 纠错与闭合：feed JSON 块直配文案↔oid（2026-11-18 13:45）
+
+**之前错配根因**：把 `flowChangeFeed` 事件链的「最新 to_feed_id」当成当前在播条目。事件记录的是**切换瞬间的目标条**，叠加预载与跨会话残留，事件最新 oid ≠ 当前可见条目。
+
+**正确闭合方法（已验证）**：renderer u8 堆里有成块的 feed JSON（`{"id":"<oid>","nickname":"...","object_desc":{"description":"...","media":[{"url":"..."}]}}`），文案与 oid 同块连续。抽取器 `tools/b-feed-extract.py`，正则抽 id/nickname/description/media url，落 `work/feed_extract.json`；当前条目用 **UIA 可见文案 ↔ description 匹配** 确定，事件流仅作辅助。
+
+**本次实测两组列表（38 条）**：
+- **窗口 A 推荐流**（renderer 22200/46992，nickname 各异）：当前在播 `15023453374292958240` 我系二白「找了陌生人上门喂猫遛狗，被家里机器人全程盘问…」3:06 10万+；预载 `15056506843059718966` 陈慎思 TOP1、`15024413937212460561` 小宋同学机场志愿者；其余为陈慎思系列及跨会话残留（含明菲形体舞蹈 `15051355211036106062`）。
+- **窗口 B 乖乖兔3311 主页列表**（13 条，nickname 全为乖乖兔3311）：当前在播 `15054483428878256700`「我们总要热爱点什么，去靠近光…」0:29 赞2；其后 `15053824208758573633` 炫逸舞厅 0:51 赞8、`15053690352862693947` 无病无灾 0:14 赞65；往前 `15054739469791005251` 敬岁月敬自由、`15055446618656148054` 每一刻限量版、`15056445225933736528` 旭日东升等。
+
+**分组判据**：同一 renderer 堆内，按 `nickname` 聚簇区分主页列表（单一作者）与推荐流（多作者）；当前条目以 UIA 当前可见文案命中 description 为准。feed 块内 `media[0].url` 即 stodownload 流地址，可直接回表补 URL。
+
+> ⚠️ 本节标注的「当前在播」两条（我系二白 `15023453374292958240`、靠近光 `15054483428878256700`）在随后复测中被证明是**更早时刻的旧快照**，已被 16.52 撤回。feed 块只给"缓存里出现过哪些条目"，不能单独判定"此刻在播哪条"。
+
+### 16.52 复测纠错：快照/事件均非实时指针，播放是持续过程（2026-11-18 13:30 后）
+
+**实测实况（此刻 UIA 顶层播放窗，pid 47640）**：
+- 窗口 B（乖乖兔3311）：进度 `0:01 / 2:20`，主文案「老年大学舞蹈学会联谊会片段…」→ oid `15053542021555685971`。
+- 窗口 A（陈慎思推荐流）：进度 `17:52 / 17:52`（播完暂停在末尾），主文案「让中国音乐审美倒退…TOP1」→ oid `15056506843059718966`。
+- 窗口 41832 是账号主页卡片网格（163 条），不是播放窗。
+
+**16.51 标注的两条已切走**：我系二白、靠近光均不在当前画面；事件流最新记录也已跳到陈慎思 TOP1。
+
+**窗口 B 事件时间线（current_feed.json，idx 为 1-based 列表下标）**：13:20:42 无病无灾 `…693947` idx1 → 13:21:06 老年大学 `…685971` idx7 → 13:21:36 靠近光 `…256700` idx4 → 13:22:49 靠近光 → 13:23:19 炫逸舞厅 `…573633` idx5；此后窗口 B 再无新事件，但实况又回到老年大学 `…685971`。事件在多窗口间混用同一 contextid/主进程 41832，idx 各自独立却被归一到同一条链。
+
+**信息源时间属性与脆弱性**：
+
+| 信息源 | 记录什么 | 时间属性 | 致命弱点 |
+|---|---|---|---|
+| feed JSON 堆块 | 缓存/历史/预载条目集合 | 快照，无"当前"标记 | 已切走、预载、跨会话残留都在；挑哪条当当前只能靠猜 |
+| flowChangeFeed 事件流 | 切换瞬间目标条 | 离散事件，瞬时 | 丢事件；窗口 A/B 混用；不记暂停/进度；最新 to_oid 滞后或残留 |
+| store currentFeed/Index | 切条瞬间写入的指针变量 | 时刻快照 | 与 xplayer 实际播放可能不同步；某窗口链路没写就停在旧值 |
+| xplayer 实际解码/渲染 | 持续推进的帧与进度 | 实时连续 | 真正的"此刻在播"锚点；瘦 slave，句柄/媒体对象待反查 |
+
+**结论**：播放是持续过程，堆快照与事件变量都是某一时刻的切片，两者天然存在滞后甚至不同步；多窗口时各自走不同链路，不能用一条事件链串起两个窗口。短期可靠锚点 = **UIA 播放窗顶部进度文本（`当前/总时长`）所在层级的同级主文案+作者**，回 feed 表按文案+时长配对；二次采样进度是否走动判断播放中/暂停/播完。深层方向 = 从 xplayer 实际解码句柄反推当前 feed oid。
