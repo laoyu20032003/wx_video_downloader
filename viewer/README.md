@@ -4,6 +4,9 @@
 
 独立的视频号卡片列表/封面/下载入口，不依赖 `wx-gui`、mitmproxy 或 HUD。
 
+> **它只适合作者主页卡片列表，不是全功能主界面。**
+> 普通用户请先看 [使用场景指南](../docs/usage-guide.md)；大多数情况用 `wx-gui.vbs` 更简单。
+
 ![wx-viewer](../images/wx-viewer.png)
 
 ## 启动

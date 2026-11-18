@@ -14,12 +14,16 @@
 - ✅ 多种用法：`wx-dl.cmd` 自动下载、`wx-save.cmd` 悬停卡片 + F8 精确保存，或 `wx-viewer.vbs` 独立卡片列表下载
 - ✅ 已下载卡片显示 **✓ 已下载** 徽标，不用重复下
 - ✅ 视频库窗口：封面、ID、文件名、时长、大小、分辨率、状态、下载按钮；`wx-gui.vbs` 一个入口启动监听 + HUD + 视频库
-- ✅ 独立卡片下载器 `wx-viewer.vbs`：不依赖代理/HUD，列出作者主页全部卡片，带封面、`pending/ready/done`、逐行「下载」；pending 行会自动 hover 8 秒后绑定并下载
+- ✅ 作者主页卡片列表（专用）`wx-viewer.vbs`：不依赖代理/HUD，列出作者主页全部卡片，带封面、`pending/ready/done`、逐行「下载」；pending 行会自动 hover 8 秒后绑定并下载
 - ✅ 不需要改微信、不降级、不装驱动
 - ✅ 不需要手动复制 URL、不需要 Fiddler/Charles
 - ✅ 下载完成前做全片解码校验，不给你坏文件
 - ✅ 退出或直接关窗口都会自动还原系统代理
 - ✅ 只代理本机流量，证书只装进「当前用户」，不需要管理员
+
+> **普通用户不知道怎么选？先看 [docs/usage-guide.md](docs/usage-guide.md)。**
+>
+> 大多数情况下首选 **`wx-gui.vbs`**；`wx-viewer` 是“作者主页卡片列表”专用工具，不是最高级入口。
 
 ## 环境要求
 
@@ -59,8 +63,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 | 用法 | 入口 | 适合 |
 |---|---|---|
 | 视频库一键（推荐） | 双击 **`wx-gui.vbs`** | 监听 + HUD + 视频库，一个入口、无控制台 |
-| 独立卡片下载器 | 双击 **`wx-viewer.vbs`** | 不启动代理/HUD，按作者主页卡片逐条下载；支持 pending 自动 hover |
-| 自动下载 | 双击 **`wx-dl.cmd`** | 边看边存、不介意多下 |
+| 作者主页卡片列表（专用） | 双击 **`wx-viewer.vbs`** | 不启动代理/HUD，按作者主页卡片逐条下载；支持 pending 自动 hover || 自动下载 | 双击 **`wx-dl.cmd`** | 边看边存、不介意多下 |
 | 悬停 + F8 精确保存 | 双击 **`wx-save.cmd`** | 只存你选中的视频、不打开视频库 |
 
 需要监听的两种模式第一次启动后，都要把**微信完全退出再打开一次**（微信会缓存系统代理，不重开流量不经过代理）。
@@ -172,9 +175,12 @@ HUD 是只读覆盖层，不修改微信页面。
 
 ![视频号视频库](images/wx-gui.png)
 
-## 独立卡片下载器：`wx-viewer.vbs`
+## 作者主页卡片列表（专用）：`wx-viewer.vbs`
 
 `wx-viewer` 不启动 mitmproxy、不装 HUD，直接读微信当前作者主页的 UIA 卡片，并把卡片和流 URL 做跨层绑定。
+
+> **它不是全功能主界面，只适合作者主页卡片列表。**
+> 普通用户请先看 [使用场景指南](docs/usage-guide.md)。
 
 ![wx-viewer 卡片列表](images/wx-viewer.png)
 
