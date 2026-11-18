@@ -25,6 +25,9 @@ ROOT = os.path.dirname(HERE)
 WORK = os.path.join(HERE, "work")
 LIB = os.path.join(WORK, "library.json")
 BASELINE = os.path.join(WORK, "pairs_baseline.json")
+SEED_JSON = os.path.join(WORK, "decodekey_map.json")
+SEED_SCAN = os.path.join(HERE, "seed_scan.py")
+DL_ENGINE = os.path.join(HERE, "dl_engine.py")
 OUT_JSON = os.path.join(WORK, "uia_cards.json")
 OUT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "视频号")
 TOOL = os.path.join(ROOT, "wx-dl.ps1")
@@ -79,6 +82,31 @@ def clean_text(s):
         return "".join(ch for ch in s if 33 <= ord(ch) <= 126)
     except Exception:
         return ""
+
+
+def load_seeds():
+    try:
+        with open(SEED_JSON, encoding="utf-8") as f:
+            rows = json.load(f)
+        out = {}
+        for r in rows:
+            if r.get("src") == "report" and r.get("oid") and r.get("decodeKey"):
+                out.setdefault(str(r["oid"]), str(r["decodeKey"]))
+        return out
+    except Exception:
+        return {}
+
+
+def ensure_seeds():
+    if fresh(SEED_JSON, 600):
+        return load_seeds()
+    try:
+        subprocess.run(
+            [sys.executable.replace("pythonw.exe", "python.exe"), SEED_SCAN],
+            capture_output=True, timeout=180, creationflags=CREATE_NO_WINDOW)
+    except Exception:
+        pass
+    return load_seeds()
 
 
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -191,6 +219,21 @@ class DownloadWorker(threading.Thread):
     def run(self):
         try:
             key = self.row.get("key")
+            url0 = clean_text(self.row.get("url") or "")
+            oid0 = self.row.get("object_id")
+            if complete_url(url0) and oid0:
+                seed = ensure_seeds().get(str(oid0))
+                if seed:
+                    self.q.put(("status", f"seed 自解密下载 oid={oid0} seed={seed}"))
+                    self.q.put(("bound", {"key": key, "object_id": oid0, "url": url0}))
+                    saved, reason = self._download_seed(url0, oid0, seed)
+                    if saved:
+                        self.q.put(("saved", {"key": key, "file": saved,
+                                              "object_id": oid0, "url": url0}))
+                    else:
+                        self.q.put(("failed", reason, key))
+                    return
+
             c = scanmod.Collector(OUT_JSON, scroll=True)
             c._init_uia()
             c._pick_profile()
@@ -245,6 +288,31 @@ class DownloadWorker(threading.Thread):
         if rec and complete_url(clean_text(rec.get("url") or "")):
             return clean_text(rec["url"]), rec.get("object_id")
         return "", None
+
+    def _download_seed(self, url, oid, seed):
+        sec = int(self.row.get("seconds") or 0)
+        tag = "".join(ch for ch in clean_text(oid) if ch.isalnum()) or "seed"
+        args = [
+            sys.executable.replace("pythonw.exe", "python.exe"),
+            DL_ENGINE, "--url", url, "--seed", str(seed), "--tag", tag,
+            "--outdir", OUT_DIR, "--work", WORK,
+        ]
+        if sec > 0:
+            args += ["--expected-duration", str(sec)]
+        try:
+            p = run_hidden(args, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=600)
+            out = (p.stdout or "") + "\n" + (p.stderr or "")
+            for line in out.splitlines():
+                if line.startswith("SAVED="):
+                    return line.split("=", 1)[1].strip(), ""
+            lines = [x.strip() for x in out.splitlines() if x.strip()]
+            for line in reversed(lines):
+                if line not in ("FAILED",):
+                    return "", line
+            return "", "seed 自解密失败"
+        except Exception as e:
+            return "", "seed 下载失败: " + str(e)
 
     def _download(self, url, oid, row):
         url = clean_text(url)

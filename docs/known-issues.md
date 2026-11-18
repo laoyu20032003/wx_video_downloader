@@ -1,4 +1,4 @@
-﻿# 已知问题与解决方案
+# 已知问题与解决方案
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -720,7 +720,7 @@ oid: None
 - 卡片 XML 只有 URL，没有 `decodeKey/seed`；要明文头仍需实际播放/解码；
 - 历史转发残留不代表当前主页；不能拿它批量枚举作者作品。
 
-## 13.8 2026-11-18 突破：seed 自解密（豆包已闭环，本项目尚未接入）
+## 13.8 2026-11-18 突破：seed 自解密（viewer 已接入，wx-dl 尚未）
 
 豆包在 `association-research.md` §16.43 记录了一个重要进展：
 
@@ -747,19 +747,20 @@ oid 15052259438420827465  seed 1575101769 1,499,310 bytes / 20.81s
 - 未取流/未上报的 pending 卡片仍然没有 seed；
 - 同一 oid 偶发两条 seed，需要校验裁决。
 
-当前本项目：
+当前本仓库：
 
 ```text
+viewer/seed_scan.py + viewer/isaac64.py + viewer/dl_engine.py --seed
+已接入按 oid 查 seed、直接自解密下载；实测 40.22s 文件成功
 wx-dl.ps1 仍走“扫描内存明文头 + 拼接”路线
-尚未接入 seed / ISAAC64 分支
 ```
 
-所以这条只能算豆包侧已验证的备选方案；要落地到本仓库，需要：
+剩余工作：
 
-1. 增加 `decodeKey/seed` 提取（report 串扫描）；
-2. `wx-dl` 增加 `-Seed` 分支；
-3. 用 ftyp/moov/mdat + ffprobe/ffmpeg 校验；
-4. 处理多 seed 候选。
+1. 扩大 `decodeKey/seed` 覆盖率；
+2. 把 seed 分支接进 `wx-dl.ps1` / `wx-gui` 自动链路；
+3. 处理同一 oid 多 seed 候选；
+4. 只有 URL 没有 seed 的 pending 仍需 hover/播放。
 
 ## 14. 目前无法可靠解决的问题
 

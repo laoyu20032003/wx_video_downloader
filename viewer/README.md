@@ -18,7 +18,7 @@ wscript wx-viewer.vbs
 pythonw viewer\wx_viewer.py
 ```
 
-依赖：Python 3.14、comtypes、psutil、Pillow、tkinter、pwsh、curl、ffmpeg/ffprobe。
+依赖：Python 3.14、comtypes、psutil、Pillow、tkinter、requests、pwsh、curl、ffmpeg/ffprobe。
 
 ## 功能
 
@@ -41,11 +41,18 @@ pythonw viewer\wx_viewer.py
 
 ```text
 ready/pending
-→ UIA 重新定位卡片
-→ hover 8 秒（预览解码，明文头常驻；不必点开播放器）
+→ 若该 oid 已有 report decodeKey/seed：直接 ISAAC64 自解密下载（不 hover）
+→ 否则 UIA 重新定位卡片
+→ hover 8 秒（预览解码，明文头常驻）
 → 匹配 oid / 完整 URL
 → wx-dl 下载密文 + 拼接明文头 + 全片校验
 ```
+
+seed 自解密使用：
+
+- `seed_scan.py`：扫 `kvReport` 串，得到 `oid → decodeKey`；
+- `isaac64.py`：ISAAC64 前缀解密；
+- `dl_engine.py --seed`：下载密文 → 解前 131072 字节 → ftyp/moov/mdat + ffprobe/ffmpeg 校验。
 
 实测成功样例：
 
@@ -53,6 +60,10 @@ ready/pending
 视频号_20261117_024143_576p_82s.mp4
 10,256,192 bytes
 duration 82.33s
+
+oid 15050086854154853712 seed 979861605
+视频号_20261118_230129_576p_40s.mp4
+3,566,401 bytes / 40.22s
 ```
 
 ## 限制
@@ -87,5 +98,7 @@ viewer/work/mem_model2.json
 - `main_pairs.py`：主进程 `object_id ↔ URL`
 - `mem_render.py`：renderer 堆模型（oid/index/时长/点赞）
 - `resolve.py`：跨层绑定解析
+- `seed_scan.py`：从 kvReport 串提取 `oid → decodeKey`
+- `isaac64.py` / `dl_engine.py`：seed 自解密与校验
 - `../wx-viewer.vbs`：无控制台启动器
 
