@@ -236,6 +236,7 @@ class DownloadWorker(threading.Thread):
             if complete_url(url0) and oid0:
                 seed = ensure_seeds().get(str(oid0))
                 if seed:
+                    self.q.put(("rowstatus", key, "seed"))
                     self.q.put(("status", f"seed 自解密下载 oid={oid0} seed={seed}"))
                     self.q.put(("bound", {"key": key, "object_id": oid0, "url": url0}))
                     saved, reason = self._download_seed(url0, oid0, seed)
@@ -257,6 +258,7 @@ class DownloadWorker(threading.Thread):
 
             # 无论 ready 还是 pending，都先 hover 8 秒：
             # ready 需要明文头；pending 还需要让 renderer 建立 oid/URL 记录。
+            self.q.put(("rowstatus", key, "hovering"))
             self.q.put(("status", "hover 8 秒（不点击播放）…"))
             c.hover(card, seconds=8.0)
 
@@ -511,6 +513,12 @@ class App(tk.Tk):
                     self.logline(f"主进程配对基线已建立: {item[1]}")
                 elif kind == "baseline_error":
                     self.logline("主进程配对基线失败: " + item[1])
+                elif kind == "rowstatus":
+                    _, rk, rs = item
+                    row = self.row_by_key(rk)
+                    if row:
+                        row["status"] = rs
+                        self.render()
                 elif kind == "status":
                     self.status.configure(text=item[1])
                     self._progress(item[1])
@@ -693,7 +701,7 @@ class App(tk.Tk):
             return
         self.dl_btn.configure(state="disabled")
         self.status.configure(text="下载任务开始…")
-        row["status"] = "hovering"
+        row["status"] = "queued"
         row["account"] = self.current_account
         self.render()
         self.worker = DownloadWorker(self.q, dict(row))
