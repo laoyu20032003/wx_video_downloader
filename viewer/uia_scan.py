@@ -68,21 +68,6 @@ def parse_like(s):
     return int(m.group(1)) if m else None
 
 
-def _norm_text(s):
-    return (s or "").replace("\u200b", "").replace("\ufeff", "").strip()
-
-
-def _desc_match(a, b):
-    a, b = _norm_text(a), _norm_text(b)
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    # 窗口缩放/省略号会截断文案；前 12 字互相包含即可视为同一卡
-    n = min(12, len(a), len(b))
-    return a[:n] == b[:n] or a.startswith(b[:n]) or b.startswith(a[:n])
-
-
 class Collector:
     def __init__(self, out_path, wait=0.8, max_pages=12, scroll=True, restore=True, cap=False, capture_covers=True):
         self.out_path = out_path
@@ -445,32 +430,11 @@ class Collector:
             cards = self.read_elements(False)
             matches = [c for c in cards if c["key"] == key]
             if not matches:
-                parts = key.split("|")
-                if len(parts) >= 2:
-                    # 同样时长+点赞，文案只做前缀匹配（窗口缩放会截断文案）
-                    matches = [c for c in cards
-                               if c["duration"] == parts[0]
-                               and c["like"] == parts[1]
-                               and _desc_match(c.get("desc"), parts[2] if len(parts) > 2 else "")]
-            if not matches:
-                self.last_find_reason = "当前 UIA 没有同 key/时长点赞/前缀候选"
+                self.last_find_reason = "当前 UIA 没有完全相同的 duration|like|desc"
                 return None
             if len(matches) > 1:
-                # 同 key 不唯一：再按时长+点赞+文案前缀缩小；仍不唯一则拒绝猜
-                parts = key.split("|")
-                if len(parts) >= 3:
-                    narrowed = [c for c in matches if _desc_match(c.get("desc"), parts[2])]
-                    if len(narrowed) == 1:
-                        matches = narrowed
-                    elif len(narrowed) > 1:
-                        self.last_find_reason = f"同 key 候选 {len(narrowed)} 个，拒绝猜"
-                        return None
-                    else:
-                        self.last_find_reason = "多个候选但文案前缀对不上"
-                        return None
-                else:
-                    self.last_find_reason = f"同 key 候选 {len(matches)} 个，拒绝猜"
-                    return None
+                self.last_find_reason = f"完全同 key 候选 {len(matches)} 个，拒绝猜"
+                return None
             card = matches[0]
             if self._visible(card["rect"]):
                 return card
@@ -501,14 +465,14 @@ class Collector:
         visible = [c for c in cards if self._visible(c["rect"])]
         same_dur = [c for c in cards if c["duration"] == dur]
         same_dl = [c for c in same_dur if c["like"] == like]
-        prefix = [c for c in same_dur if _desc_match(c.get("desc"), desc)]
-        top = (prefix or same_dl or same_dur)[:3]
+        same_desc = [c for c in same_dur if (c.get("desc") or "") == desc]
+        top = (same_desc or same_dl or same_dur)[:3]
         return {
             "cards": len(cards),
             "visible": len(visible),
             "same_duration": len(same_dur),
             "same_duration_like": len(same_dl),
-            "same_prefix": len(prefix),
+            "same_desc": len(same_desc),
             "account": getattr(self, "account", "") or "",
             "examples": [
                 f'{c["duration"]}|{c["like"]}|{(c.get("desc") or "")[:24]}'

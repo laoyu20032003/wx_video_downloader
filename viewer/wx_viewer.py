@@ -265,7 +265,7 @@ class DownloadWorker(threading.Thread):
                     f"定位={getattr(c, 'last_find_reason', '') or '未知'}；"
                     f"当前账号={d.get('account','?')}，UIA={d.get('cards')}张/"
                     f"可见{d.get('visible')}张，同时长{d.get('same_duration')}，"
-                    f"时长+点赞{d.get('same_duration_like')}，前缀{d.get('same_prefix')}；"
+                    f"时长+点赞{d.get('same_duration_like')}，同文案{d.get('same_desc')}；"
                     f"候选={d.get('examples')}"
                 )
                 self.q.put(("status", "定位失败：查看日志候选，先切回该作者主页并滚到目标附近"))
