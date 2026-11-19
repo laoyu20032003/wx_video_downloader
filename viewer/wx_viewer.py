@@ -94,7 +94,11 @@ def load_seeds():
         out = {}
         for r in rows:
             if r.get("src") == "report" and r.get("oid") and r.get("decodeKey"):
-                out.setdefault(str(r["oid"]), str(r["decodeKey"]))
+                oid = str(r["oid"])
+                seed = str(r["decodeKey"])
+                arr = out.setdefault(oid, [])
+                if seed not in arr:
+                    arr.append(seed)
         return out
     except Exception:
         return {}
@@ -249,13 +253,11 @@ class DownloadWorker(threading.Thread):
                     if not complete_url(url):
                         url, oid = self._refresh_binding()
                     if complete_url(url):
-                        seed = ensure_seeds().get(str(oid)) if oid else None
                         self.q.put(("bound", {"key": key, "object_id": oid, "url": url}))
-                        if seed:
-                            self.q.put(("status", f"send-event 后 seed 下载 oid={oid}"))
-                            saved, reason = self._download_seed(url, oid, seed)
-                        else:
-                            self.q.put(("status", "send-event 后下载中（wx-dl）…"))
+                        self.q.put(("status", f"send-event 后尝试 seed 下载 oid={oid}"))
+                        saved, reason = self._try_seeds(url, oid)
+                        if not saved:
+                            self.q.put(("status", "seed 未匹配，改用播放器明文头下载…"))
                             saved, reason = self._download(url, oid or "slot", self.row)
                         self._send_close()
                         if saved:
@@ -270,18 +272,16 @@ class DownloadWorker(threading.Thread):
                     self.q.put(("status", f"send-event 失败，回退 hover（{why}）"))
 
             if complete_url(url0) and oid0:
-                seed = ensure_seeds().get(str(oid0))
-                if seed:
+                if ensure_seeds().get(str(oid0)):
                     self.q.put(("rowstatus", key, "seed"))
-                    self.q.put(("status", f"seed 自解密下载 oid={oid0} seed={seed}"))
+                    self.q.put(("status", f"seed 自解密下载 oid={oid0}"))
                     self.q.put(("bound", {"key": key, "object_id": oid0, "url": url0}))
-                    saved, reason = self._download_seed(url0, oid0, seed)
+                    saved, reason = self._try_seeds(url0, oid0)
                     if saved:
                         self.q.put(("saved", {"key": key, "file": saved,
                                               "object_id": oid0, "url": url0}))
-                    else:
-                        self.q.put(("failed", reason, key))
-                    return
+                        return
+                    self.q.put(("status", f"seed 不可用，回退 hover（{reason}）"))
 
             c = scanmod.Collector(OUT_JSON, scroll=True)
             c._init_uia()
@@ -365,6 +365,17 @@ class DownloadWorker(threading.Thread):
         if rec and complete_url(clean_text(rec.get("url") or "")):
             return clean_text(rec["url"]), rec.get("object_id")
         return "", None
+
+    def _try_seeds(self, url, oid):
+        seeds = ensure_seeds().get(str(oid), [])
+        last = "没有 seed"
+        for i, seed in enumerate(seeds):
+            self.q.put(("status", f"seed 自解密 oid={oid} seed={seed}（{i + 1}/{len(seeds)}）"))
+            saved, reason = self._download_seed(url, oid, seed)
+            if saved:
+                return saved, ""
+            last = reason
+        return "", last
 
     def _download_seed(self, url, oid, seed):
         sec = int(self.row.get("seconds") or 0)

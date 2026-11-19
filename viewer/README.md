@@ -1,4 +1,4 @@
-﻿# wx-viewer（本项目版本）
+# wx-viewer（本项目版本）
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -100,6 +100,7 @@ UIA 找卡片
   send-event 后 seed 下载 oid=14441929253197781213
   SAVED=..._576p_258s.mp4
   ```
+- 同一 `oid` 可能有多个 report seed；viewer 会逐个尝试，全部失败后回退播放器明文头；
 - 单次触发较慢（UIA 枚举全部卡片约 40–60 秒），目前是实验功能；
 - 原 `wx-viewer.vbs` 的行为不变。
 ## 限制
