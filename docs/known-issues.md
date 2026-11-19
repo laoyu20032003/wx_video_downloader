@@ -1,4 +1,4 @@
-# 已知问题与解决方案
+﻿# 已知问题与解决方案
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -791,12 +791,13 @@ wx-dl.ps1 仍走“扫描内存明文头 + 拼接”路线
 | `SendInput` | 网格不翻 |
 | `keybd_event` PageDown/PageUp | 无效 |
 | `PostMessage` WM_KEYDOWN/WM_MOUSEWHEEL | 无效 |
-| UIA `ScrollPattern`/`ScrollItemPattern` | 没有元素暴露 |
+| UIA `page-profile` 后代 `ScrollPattern` | 没有暴露 |
+| 祖先 `class=content` 的 `ScrollPattern` | **可用**（viewer 的 `scroll_to_key` 用它） |
 | 真实鼠标滚轮/PageDown | 正常 |
 
 对本项目的含义：
 
-- `wx-viewer` 的自动滚屏在部分环境下会失效；
+- `wx-viewer` 的滚轮注入在部分环境下会失效；但 `content` 祖先的 UIA `ScrollPattern` 可用，`scroll_to_key` 不依赖鼠标；
 - 失效时 UIA 树只有**当前已加载批次**（约 30 张），不是作者主页全量；
 - 手动滚动微信后，再点「重新扫描」可以并入下一批；
 - 不要用 `wx-viewer` 做“自动翻完作者主页”的承诺；

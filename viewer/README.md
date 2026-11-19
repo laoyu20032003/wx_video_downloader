@@ -72,8 +72,8 @@ oid 15050086854154853712 seed 979861605
 
 ## 限制
 
-- 扫描会先滚到顶部并逐屏读取；**微信 4.2.0.53 的 CEF 网格可能隔离本地 Python 的合成滚轮/键盘**，此时自动翻页无效，只能读到当前已加载批次，需要手动滚动微信后再重新扫描；
-- 找不到卡片时：确认微信停留在该作者主页，先手动滚到目标卡附近再点下载；日志会列出当前 UIA 的账号、卡片数、同时长/同前缀候选；
+- 扫描会先滚到顶部并逐屏读取；**微信 4.2.0.53 的 CEF 网格可能隔离本地 Python 的合成滚轮/键盘**，但 `find_card` 会用祖先 `class=content` 的 UIA `ScrollPattern` 精确滚到目标卡；只有目标不在当前 UIA 序列/ScrollPattern 不可用时才需要手动滚动；
+- 找不到卡片时：确认微信停留在该作者主页，先手动滚到目标卡附近再点下载；日志会列出当前 UIA 的账号、卡片数、同时长/同文案候选；
 - renderer/主进程记录只覆盖当前会话/已加载卡片；未命中的卡片是 pending；
 - hover 8 秒是经验值；停留更久通常更容易等到 URL/report seed/明文头，但不是硬保证，太长也可能遇到缓存淘汰或限流；有 seed 的 row 不走 hover；
 - 明文头是有限缓存，新头会挤掉旧头；
@@ -100,7 +100,7 @@ viewer/work/mem_model2.json
 ## 文件
 
 - `wx_viewer.py`：Tkinter UI/扫描/下载编排
-- `uia_scan.py`：UIA 卡片读取、滚动、封面、定位、hover
+- `uia_scan.py`：UIA 卡片读取、`content.ScrollPattern` 滚到目标、封面、定位、hover
 - `main_pairs.py`：主进程 `object_id ↔ URL`
 - `mem_render.py`：renderer 堆模型（oid/index/时长/点赞）
 - `renderer_scan.py`：一次读堆同时抽卡片模型 + decodeKey/seed（比 mem_render + seed_scan 两遍快）

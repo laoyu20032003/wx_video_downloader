@@ -369,6 +369,118 @@ class Collector:
         except Exception:
             return None
 
+    def _grid_boxes(self):
+        win_cond = self.auto.CreatePropertyCondition(U.UIA_ControlTypePropertyId, U.UIA_WindowControlTypeId)
+        tops = self.auto.GetRootElement().FindAll(U.TreeScope_Children, win_cond)
+        best = None
+        for i in range(tops.Length):
+            top = tops.GetElement(i)
+            try:
+                boxes = top.FindAll(U.TreeScope_Descendants, self.box_cond)
+            except Exception:
+                continue
+            if boxes.Length and (best is None or boxes.Length > best[1].Length):
+                best = (top, boxes)
+        if best is None:
+            raise RuntimeError("未找到视频号卡片网格")
+        top, boxes = best
+        return top, boxes, top.CurrentBoundingRectangle
+
+    def _scroll_pattern(self, top, boxes, wr):
+        anchor = None
+        for i in range(boxes.Length):
+            r = boxes.GetElement(i).CurrentBoundingRectangle
+            if r.top >= wr.top and r.bottom <= wr.bottom:
+                anchor = boxes.GetElement(i)
+                break
+        if anchor is None:
+            anchor = boxes.GetElement(0)
+        cur = anchor
+        for _ in range(8):
+            if (cur.CurrentClassName or "") == "content":
+                pat = cur.GetCurrentPattern(U.UIA_ScrollPatternId)
+                return pat.QueryInterface(U.IUIAutomationScrollPattern)
+            cur = self.walker.GetParentElement(cur)
+            if cur is None:
+                break
+        return None
+
+    def scroll_to_key(self, key, max_steps=60):
+        """Pure-UIA ScrollPattern path: exact-key card -> ScrollIntoView."""
+        self.last_find_reason = ""
+        try:
+            top, boxes, wr = self._grid_boxes()
+        except Exception as e:
+            self.last_find_reason = "没有卡片网格: " + str(e)
+            return None
+        target = None
+        for i in range(boxes.Length):
+            c = self._card_from_box(boxes.GetElement(i))
+            if c and c["key"] == key:
+                if target is not None:
+                    self.last_find_reason = "网格中存在多个完全同 key 候选"
+                    return None
+                target = i
+        if target is None:
+            self.last_find_reason = "卡片网格中没有完全同 key 的 click-box"
+            return None
+        try:
+            sp = self._scroll_pattern(top, boxes, wr)
+        except Exception as e:
+            self.last_find_reason = "获取 ScrollPattern 失败: " + str(e)
+            return None
+        if sp is None:
+            self.last_find_reason = "content 没有暴露 ScrollPattern"
+            return None
+
+        prev_pct = None
+        stall = 0
+        for step in range(max_steps):
+            visible = []
+            for i in range(boxes.Length):
+                r = boxes.GetElement(i).CurrentBoundingRectangle
+                ix = max(r.left, wr.left)
+                iy = max(r.top, wr.top)
+                ax = min(r.right, wr.right)
+                ay = min(r.bottom, wr.bottom)
+                if ax - ix >= 40 and ay - iy >= 60:
+                    visible.append(i)
+            if target in visible:
+                try:
+                    el = boxes.GetElement(target)
+                    el.GetCurrentPattern(U.UIA_ScrollItemPatternId).QueryInterface(
+                        U.IUIAutomationScrollItemPattern).ScrollIntoView()
+                except Exception:
+                    pass
+                time.sleep(0.25)
+                box = boxes.GetElement(target)
+                card = self._card_from_box(box)
+                if card and self._visible(card["rect"]):
+                    return card
+            try:
+                pct = sp.CurrentVerticalScrollPercent
+            except Exception:
+                pct = -1
+            if prev_pct is not None and abs(pct - prev_pct) < 1e-6:
+                stall += 1
+            else:
+                stall = 0
+            prev_pct = pct
+            if stall >= 3:
+                self.last_find_reason = f"滚动到边界但目标仍在视口外（target={target}）"
+                return None
+            try:
+                if visible and target < visible[0]:
+                    sp.Scroll(U.ScrollAmount_NoAmount, U.ScrollAmount_LargeDecrement)
+                else:
+                    sp.Scroll(U.ScrollAmount_NoAmount, U.ScrollAmount_LargeIncrement)
+            except Exception as e:
+                self.last_find_reason = "ScrollPattern 滚动失败: " + str(e)
+                return None
+            time.sleep(0.35)
+        self.last_find_reason = f"超过 {max_steps} 步仍未把目标滚入视口"
+        return None
+
     def find_card(self, key, tries=8):
         """Fast path: native UIA Name search, then climb to the click-box.
 
@@ -379,6 +491,13 @@ class Collector:
         if self.profile is None:
             self._init_uia()
             self._pick_profile()
+        # 首选：content ScrollPattern 精确滚到目标，不模拟鼠标/键盘
+        try:
+            card = self.scroll_to_key(key)
+            if card:
+                return card
+        except Exception as e:
+            self.last_find_reason = "ScrollPattern 定位异常: " + str(e)
         parts = key.split("|", 2)
         desc = parts[2] if len(parts) >= 3 else ""
         if desc:
