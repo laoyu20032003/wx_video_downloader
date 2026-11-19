@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """UIA 滚动分页采集器（原型，可复制到 tools/uia-collect.py 的位置）。
 
 特点：
@@ -66,6 +66,21 @@ def parse_like(s):
         return int(float(m.group(1)) * 10000)
     m = re.match(r"^(\d+)", s)
     return int(m.group(1)) if m else None
+
+
+def _norm_text(s):
+    return (s or "").replace("\u200b", "").replace("\ufeff", "").strip()
+
+
+def _desc_match(a, b):
+    a, b = _norm_text(a), _norm_text(b)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # 窗口缩放/省略号会截断文案；前 12 字互相包含即可视为同一卡
+    n = min(12, len(a), len(b))
+    return a[:n] == b[:n] or a.startswith(b[:n]) or b.startswith(a[:n])
 
 
 class Collector:
@@ -427,15 +442,28 @@ class Collector:
             cards = self.read_elements(False)
             matches = [c for c in cards if c["key"] == key]
             if not matches:
-                # 文案可能被窗口宽度截断；用时长+点赞找唯一项
                 parts = key.split("|")
                 if len(parts) >= 2:
+                    # 同样时长+点赞，文案只做前缀匹配（窗口缩放会截断文案）
                     matches = [c for c in cards
-                               if c["duration"] == parts[0] and c["like"] == parts[1]]
+                               if c["duration"] == parts[0]
+                               and c["like"] == parts[1]
+                               and _desc_match(c.get("desc"), parts[2] if len(parts) > 2 else "")]
             if not matches:
                 return None
             if len(matches) > 1:
-                return None
+                # 同 key 不唯一：再按时长+点赞+文案前缀缩小；仍不唯一则拒绝猜
+                parts = key.split("|")
+                if len(parts) >= 3:
+                    narrowed = [c for c in matches if _desc_match(c.get("desc"), parts[2])]
+                    if len(narrowed) == 1:
+                        matches = narrowed
+                    elif len(narrowed) > 1:
+                        return None
+                    else:
+                        return None
+                else:
+                    return None
             card = matches[0]
             if self._visible(card["rect"]):
                 return card
@@ -449,6 +477,36 @@ class Collector:
                 self._wheel(True)
             time.sleep(0.45)
         return None
+
+    def diagnose(self, key):
+        """Explain why a slot could not be found; read-only and best-effort."""
+        parts = key.split("|", 2)
+        dur = parts[0] if parts else ""
+        like = parts[1] if len(parts) > 1 else ""
+        desc = parts[2] if len(parts) > 2 else ""
+        try:
+            if not getattr(self, "account", ""):
+                self._read_account()
+            cards = self.read_elements(False)
+        except Exception as e:
+            return {"error": str(e), "cards": 0, "visible": 0}
+        visible = [c for c in cards if self._visible(c["rect"])]
+        same_dur = [c for c in cards if c["duration"] == dur]
+        same_dl = [c for c in same_dur if c["like"] == like]
+        prefix = [c for c in same_dur if _desc_match(c.get("desc"), desc)]
+        top = (prefix or same_dl or same_dur)[:3]
+        return {
+            "cards": len(cards),
+            "visible": len(visible),
+            "same_duration": len(same_dur),
+            "same_duration_like": len(same_dl),
+            "same_prefix": len(prefix),
+            "account": getattr(self, "account", "") or "",
+            "examples": [
+                f'{c["duration"]}|{c["like"]}|{(c.get("desc") or "")[:24]}'
+                for c in top
+            ],
+        }
 
     def hover(self, card, seconds=2.2):
         self._focus()

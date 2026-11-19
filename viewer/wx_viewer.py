@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """视频号卡片列表 / 封面 / 按卡激活下载（独立于微信主界面）。
 
 流程：
@@ -256,7 +256,19 @@ class DownloadWorker(threading.Thread):
             self.q.put(("status", "定位卡片…"))
             card = c.find_card(key)
             if not card:
-                self.q.put(("error", "当前 UIA 网格里找不到这张卡", key))
+                self.q.put(("status", "定位失败，正在诊断当前 UIA 候选…"))
+                d = c.diagnose(key)
+                msg = (
+                    f"找不到卡片：viewer序号={self.row.get('index')} "
+                    f"目标={self.row.get('duration','')}|{self.row.get('like','')}|"
+                    f"{(self.row.get('desc') or '')[:24]}；"
+                    f"当前账号={d.get('account','?')}，UIA={d.get('cards')}张/"
+                    f"可见{d.get('visible')}张，同时长{d.get('same_duration')}，"
+                    f"时长+点赞{d.get('same_duration_like')}，前缀{d.get('same_prefix')}；"
+                    f"候选={d.get('examples')}"
+                )
+                self.q.put(("status", "定位失败：查看日志候选，先切回该作者主页并滚到目标附近"))
+                self.q.put(("error", msg, key))
                 return
 
             # 无论 ready 还是 pending，都先 hover 8 秒：
@@ -439,6 +451,13 @@ class App(tk.Tk):
         self.tree.pack(fill="both", expand=True, padx=8, pady=4)
         self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Double-1>", lambda e: self.download_selected())
+
+        self.hint = ttk.Label(
+            self,
+            text="找不到卡片时：确认微信停留在该作者主页，先手动滚到目标卡附近再点下载；"
+                 "日志会列出当前 UIA 的同名/同时长候选。",
+            foreground="#555")
+        self.hint.pack(fill="x", padx=8, pady=(0, 2))
 
         self.log = tk.Text(self, height=7, state="disabled")
         self.log.pack(fill="x", padx=8, pady=(0, 8))
