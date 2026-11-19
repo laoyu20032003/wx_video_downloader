@@ -242,6 +242,7 @@ class DownloadWorker(threading.Thread):
 
             # Experimental: Doubao-style PostMessage right-click play.
             # It never moves the global cursor; if it fails we fall back to hover.
+            send_need_hover = False
             if ACTIVATION == "send":
                 self.q.put(("rowstatus", key, "send"))
                 self.q.put(("status", "send-event 右键播放…"))
@@ -253,25 +254,34 @@ class DownloadWorker(threading.Thread):
                     if not complete_url(url):
                         url, oid = self._refresh_binding()
                     if complete_url(url):
+                        seeds = ensure_seeds().get(str(oid), []) if oid else []
                         self.q.put(("bound", {"key": key, "object_id": oid, "url": url}))
-                        self.q.put(("status", f"send-event 后尝试 seed 下载 oid={oid}"))
-                        saved, reason = self._try_seeds(url, oid)
-                        if not saved:
-                            self.q.put(("status", "seed 未匹配，改用播放器明文头下载…"))
-                            saved, reason = self._download(url, oid or "slot", self.row)
-                        self._send_close()
-                        if saved:
-                            self.q.put(("saved", {"key": key, "file": saved,
-                                                  "object_id": oid, "url": url}))
+                        self.row["url"] = url
+                        self.row["object_id"] = oid
+                        url0, oid0 = url, oid
+                        if seeds:
+                            # seed 不依赖播放器：先关掉播放 tab，避免遮住网格
+                            self._send_close()
+                            self.q.put(("status", f"send-event 后尝试 {len(seeds)} 个 seed；播放器已关闭"))
+                            saved, reason = self._try_seeds(url, oid)
+                            if saved:
+                                self.q.put(("saved", {"key": key, "file": saved,
+                                                      "object_id": oid, "url": url}))
+                                return
+                            self.q.put(("status", f"seed 全部失败，回退 hover（{reason}）"))
                         else:
-                            self.q.put(("failed", reason, key))
-                        return
-                    self._send_close()
-                    self.q.put(("status", f"send-event 未绑定 URL，回退 hover（{why}）"))
+                            self._send_close()
+                            self.q.put(("status", "send-event 后无 seed；已关播放器，回退 hover"))
+                        send_need_hover = True
+                    else:
+                        self._send_close()
+                        self.q.put(("status", f"send-event 未绑定 URL，回退 hover（{why}）"))
+                        send_need_hover = True
                 else:
                     self.q.put(("status", f"send-event 失败，回退 hover（{why}）"))
+                    send_need_hover = True
 
-            if complete_url(url0) and oid0:
+            if complete_url(url0) and oid0 and not send_need_hover:
                 if ensure_seeds().get(str(oid0)):
                     self.q.put(("rowstatus", key, "seed"))
                     self.q.put(("status", f"seed 自解密下载 oid={oid0}"))

@@ -1,4 +1,4 @@
-# 已知问题与解决方案
+﻿# 已知问题与解决方案
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -928,7 +928,7 @@ SAVED=..._576p_258s.mp4
 - 目标卡片必须在当前已加载/可见网格；off-screen 会失败并回退 hover；
 - UIA 枚举全部卡片较慢（约 40–60 秒）；
 - 菜单项是 Text，只能坐标点击；
-- 播放 tab 关闭后仍要保证 URL/seed 已拿到；
+- 有 seed：URL 绑定后立即关闭播放 tab，再下载；没有 seed/seed 全失败：先关闭播放 tab，回退 hover 取头；
 - 仍是实验入口，原 `wx-viewer.vbs` 保持 hover/seed 主路径。
 
 ## 14. 目前无法可靠解决的问题
