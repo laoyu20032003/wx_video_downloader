@@ -27,6 +27,7 @@ LIB = os.path.join(WORK, "library.json")
 BASELINE = os.path.join(WORK, "pairs_baseline.json")
 SEED_JSON = os.path.join(WORK, "decodekey_map.json")
 SEED_SCAN = os.path.join(HERE, "seed_scan.py")
+RENDERER_SCAN = os.path.join(HERE, "renderer_scan.py")
 DL_ENGINE = os.path.join(HERE, "dl_engine.py")
 OUT_JSON = os.path.join(WORK, "uia_cards.json")
 OUT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "视频号")
@@ -142,6 +143,13 @@ def collect_render_models():
     return total_pid, records
 
 
+def run_renderer_scan():
+    """One pass over active renderers: cards + decodeKey/seed together."""
+    run_hidden(
+        [sys.executable.replace("pythonw.exe", "python.exe"), RENDERER_SCAN],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
+
+
 def run_resolve():
     run_hidden(
         [sys.executable.replace("pythonw.exe", "python.exe"),
@@ -173,7 +181,11 @@ class ScanWorker(threading.Thread):
             try:
                 mem_path = os.path.join(WORK, "mem_model2.json")
                 if self.force or not fresh(mem_path, 600):
-                    collect_render_models()
+                    run_renderer_scan()
+                else:
+                    # 即使卡片缓存新鲜，也补一次 seed 表（可能已有新 report）
+                    if not fresh(SEED_JSON, 300):
+                        ensure_seeds()
                 self.q.put(("status", "扫描主进程完整 URL…"))
                 pairs_path = os.path.join(WORK, "main_pairs.json")
                 if not self.force and fresh(pairs_path, 600):
@@ -269,7 +281,7 @@ class DownloadWorker(threading.Thread):
             self.q.put(("error", str(e), self.key))
 
     def _resolve(self):
-        collect_render_models()
+        run_renderer_scan()
         return run_resolve().get("rows") or []
 
     def _refresh_binding(self):

@@ -161,11 +161,20 @@ def scan_pid(pid):
 def weixin_pids():
     if psutil is None:
         return []
-    out = []
+    allp = []
     for p in psutil.process_iter(["pid", "name"]):
         if (p.info["name"] or "").lower() == "weixin.exe":
-            out.append(p.info["pid"])
-    return out
+            allp.append(p.info["pid"])
+    roots = []
+    for pid in allp:
+        try:
+            parent = psutil.Process(pid).parent()
+            if parent is None or (parent.name() or "").lower() != "weixin.exe":
+                roots.append(pid)
+        except Exception:
+            roots.append(pid)
+    # 根进程持有主配对；子进程通常是 renderer/utility 附属，扫了也是 0
+    return roots or allp
 
 
 def scan():

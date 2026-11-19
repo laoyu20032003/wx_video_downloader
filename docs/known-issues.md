@@ -1,4 +1,4 @@
-# 已知问题与解决方案
+﻿# 已知问题与解决方案
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -761,6 +761,47 @@ wx-dl.ps1 仍走“扫描内存明文头 + 拼接”路线
 2. 把 seed 分支接进 `wx-dl.ps1` / `wx-gui` 自动链路；
 3. 处理同一 oid 多 seed 候选；
 4. 只有 URL 没有 seed 的 pending 仍需 hover/播放。
+
+## 13.9 微信 4.2.0.53：UIA 合成滚轮/键盘被隔离
+
+豆包在 4.2.0.53 实测：
+
+| 注入方式 | 结果 |
+|---|---|
+| `mouse_event` WHEEL | 网格不翻 |
+| `SendInput` | 网格不翻 |
+| `keybd_event` PageDown/PageUp | 无效 |
+| `PostMessage` WM_KEYDOWN/WM_MOUSEWHEEL | 无效 |
+| UIA `ScrollPattern`/`ScrollItemPattern` | 没有元素暴露 |
+| 真实鼠标滚轮/PageDown | 正常 |
+
+对本项目的含义：
+
+- `wx-viewer` 的自动滚屏在部分环境下会失效；
+- 失效时 UIA 树只有**当前已加载批次**（约 30 张），不是作者主页全量；
+- 手动滚动微信后，再点「重新扫描」可以并入下一批；
+- 不要用 `wx-viewer` 做“自动翻完作者主页”的承诺；
+- 作者主页全量批量仍应使用 `wx-gui` 的播放器连播。
+
+`wx-gui` 连续播放不依赖这个 UIA 滚轮，所以不受此限制影响。
+
+## 13.10 2026-11-19：viewer 扫描性能优化
+
+参考豆包的 `renderer-scan.py` / root-only main-pair，本仓库的 viewer 已改为：
+
+- `renderer_scan.py`：一次读 renderer 堆，同时抽卡片模型 + `decodeKey/seed`；
+- 只扫活跃 renderer，跳过 `PAGE_EXECUTE_READ` 共享段和 >16MB 大块；
+- `main_pairs.py` 只扫根 `Weixin.exe`，不再扫附属子进程；
+- 仍复用 10 分钟内的 `mem_model2.json` / `main_pairs.json`。
+
+本机实测：
+
+```text
+renderer_scan: ~27s
+main_pairs（root-only）: ~25s
+```
+
+比原来的 mem_render + seed_scan 两遍 + 全 Weixin 进程明显快，但 UIA 滚轮隔离仍可能限制卡片数量。
 
 ## 14. 目前无法可靠解决的问题
 
