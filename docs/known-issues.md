@@ -803,6 +803,67 @@ main_pairs（root-only）: ~25s
 
 比原来的 mem_render + seed_scan 两遍 + 全 Weixin 进程明显快，但 UIA 滚轮隔离仍可能限制卡片数量。
 
+## 13.11 同一作者主页里为什么有的 ready、有的 pending
+
+UIA 卡片本身只有：
+
+```text
+时长 / 点赞 / 文案 / 封面 / 序号
+```
+
+没有 oid、没有 URL。`ready` 不是卡片的属性，而是**本次会话里能不能把它绑到完整流**。
+
+`resolve.py` 的判定：
+
+```text
+卡片 seconds
+→ by_len[seconds] 找候选
+→ 按 index / like 排序
+→ 候选 raw_url 必须含 sign + basedata
+→ ready
+```
+
+pending 的根源按常见程度：
+
+1. **没有该时长的候选**  
+   主进程/renderer 里没有这条的 oid/时长记录；通常是因为没 hover、没播放、没预加载、没进过当前批次。
+
+2. **有记录但 URL 不完整**  
+   只有 `encfilekey/m/token` 或缓存的短引用，缺 `sign/basedata`，CDN 会 400。
+
+3. **候选时长未知**  
+   主进程 meta 的 `vid_len` 经常为空；没有 renderer 记录补时长，就进不了 `by_len`。
+
+4. **oid 已被占用**  
+   同一 oid 只能分配给一张卡；重复/截断副本会被排除。
+
+5. **同时长歧义**  
+   多条候选的 index/like 都接近，解析器拒绝猜，置 pending。
+
+6. **UIA 只扫到当前加载批次**  
+   4.2.0.53 合成滚轮可能被隔离；没扫到的卡不会进列表，已进列表但没绑定记录的仍是 pending。
+
+7. **换号/旧缓存**  
+   旧账号的 oid/URL 不能套到新列表；手动重新扫描会强制刷新。
+
+### 已补的 report URL 回退
+
+`decodekey_map.json` 的 `kvReport` 记录常带：
+
+```text
+oid + 完整 20302 URL + decodeKey
+```
+
+`resolve.py` 现在会在主进程/renderer URL 不完整时，用同 oid 的 report URL 补全。  
+本机复测：24 张卡，21 张 ready（此前 12 张卡 11 ready，pending 更多）。
+
+### 怎么让 pending 变 ready
+
+1. 在微信里 hover 该卡 8 秒，或点开播放几秒；
+2. 回 viewer 点「重新扫描」；
+3. 看 `viewer/work/resolved_cards.json` 的 `note`；
+4. 有 seed 但没有 URL 的，仍需先触发一次取流/report 记录。
+
 ## 14. 目前无法可靠解决的问题
 
 1. **腾讯服务端限流**  

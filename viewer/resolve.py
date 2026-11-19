@@ -29,6 +29,13 @@ def load(name):
 uia = load("uia_cards.json") or {"cards": []}
 pairs_doc = load("main_pairs.json") or {"rows": []}
 mm = load("mem_model2.json") or []
+dk = load("decodekey_map.json") or []
+report_url = {}
+for r in dk:
+    if r.get("src") == "report" and r.get("oid") and r.get("url"):
+        u = r["url"]
+        if "sign=" in u and "basedata=" in u:
+            report_url[str(r["oid"])] = u
 
 # renderer 记录：oid / encfilekey / m 三键索引
 by_oid, by_ek, by_m = {}, {}, {}
@@ -81,6 +88,8 @@ for p in pairs_doc["rows"]:
         pidx = None; ppos = meta.get("feed_pos"); ppage = meta.get("page_num")
         pscid = meta.get("scid"); paid = meta.get("aid"); pnonce = None; purl = ""
     url = p.get("raw_url", "") or purl
+    if ("sign=" not in url or "basedata=" not in url) and oid in report_url:
+        url = report_url[oid]
     pairs.append({"oid": oid, "key": ek, "raw_url": url, "m": m, "token": p.get("token", ""),
                   "len": plen, "like": plike, "nonce": pnonce, "index": pidx,
                   "pos": ppos, "page": ppage, "scid": pscid, "aid": paid,
@@ -89,9 +98,14 @@ for p in pairs_doc["rows"]:
 
 # renderer 独有、主进程未出现但自带邻近 URL 的记录，补进候选池
 for oid, rend in by_oid.items():
-    if oid in seen_oid or not rend.get("url"):
+    if oid in seen_oid:
         continue
-    pairs.append({"oid": oid, "key": rend["ek"] or "", "raw_url": rend["url"],
+    rurl = rend["url"]
+    if ("sign=" not in rurl or "basedata=" not in rurl) and oid in report_url:
+        rurl = report_url[oid]
+    if not rurl:
+        continue
+    pairs.append({"oid": oid, "key": rend["ek"] or "", "raw_url": rurl,
                   "m": rend["m"] or "", "token": "", "len": rend["len"], "like": rend["like"],
                   "nonce": rend["nonce"], "index": rend["index"], "pos": rend["pos"],
                   "page": rend["page"], "scid": rend["scid"], "aid": rend["aid"],
