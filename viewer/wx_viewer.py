@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """视频号卡片列表 / 封面 / 按卡激活下载（独立于微信主界面）。
 
 流程：
@@ -28,12 +28,10 @@ BASELINE = os.path.join(WORK, "pairs_baseline.json")
 SEED_JSON = os.path.join(WORK, "decodekey_map.json")
 SEED_SCAN = os.path.join(HERE, "seed_scan.py")
 RENDERER_SCAN = os.path.join(HERE, "renderer_scan.py")
-SEND_TRIGGER = os.path.join(HERE, "send_trigger.py")
 DL_ENGINE = os.path.join(HERE, "dl_engine.py")
 OUT_JSON = os.path.join(WORK, "uia_cards.json")
 OUT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "视频号")
 TOOL = os.path.join(ROOT, "wx-dl.ps1")
-ACTIVATION = os.environ.get("WX_VIEWER_ACTIVATION", "hover").lower()
 
 sys.path.insert(0, HERE)
 import uia_scan as scanmod
@@ -240,55 +238,7 @@ class DownloadWorker(threading.Thread):
             url0 = clean_text(self.row.get("url") or "")
             oid0 = self.row.get("object_id")
 
-            # Experimental: Doubao-style PostMessage right-click play.
-            # It never moves the global cursor; if it fails we fall back to hover.
-            send_need_hover = False
-            if ACTIVATION == "send":
-                self.q.put(("rowstatus", key, "send"))
-                self.q.put(("status", "send-event：先尝试后台右键（不抢前台）…"))
-                ok, why = self._send_play()
-                if not ok:
-                    self.q.put(("status", f"后台右键失败（{why}），前台滚到目标再试…"))
-                    if self._prepare_visible():
-                        self.q.put(("status", "send-event 右键播放…"))
-                        ok, why = self._send_play()
-                    else:
-                        ok, why = False, "目标卡未能滚到视口"
-                if ok:
-                    time.sleep(2.0)
-                    url = url0
-                    oid = oid0
-                    if not complete_url(url):
-                        url, oid = self._refresh_binding()
-                    if complete_url(url):
-                        seeds = ensure_seeds().get(str(oid), []) if oid else []
-                        self.q.put(("bound", {"key": key, "object_id": oid, "url": url}))
-                        self.row["url"] = url
-                        self.row["object_id"] = oid
-                        url0, oid0 = url, oid
-                        if seeds:
-                            # seed 不依赖播放器：先关掉播放 tab，避免遮住网格
-                            self._send_close()
-                            self.q.put(("status", f"send-event 后尝试 {len(seeds)} 个 seed；播放器已关闭"))
-                            saved, reason = self._try_seeds(url, oid)
-                            if saved:
-                                self.q.put(("saved", {"key": key, "file": saved,
-                                                      "object_id": oid, "url": url}))
-                                return
-                            self.q.put(("status", f"seed 全部失败，回退 hover（{reason}）"))
-                        else:
-                            self._send_close()
-                            self.q.put(("status", "send-event 后无 seed；已关播放器，回退 hover"))
-                        send_need_hover = True
-                    else:
-                        self._send_close()
-                        self.q.put(("status", f"send-event 未绑定 URL，回退 hover（{why}）"))
-                        send_need_hover = True
-                else:
-                    self.q.put(("status", f"send-event 失败，回退 hover（{why}）"))
-                    send_need_hover = True
-
-            if complete_url(url0) and oid0 and not send_need_hover:
+            if complete_url(url0) and oid0:
                 if ensure_seeds().get(str(oid0)):
                     self.q.put(("rowstatus", key, "seed"))
                     self.q.put(("status", f"seed 自解密下载 oid={oid0}"))
@@ -334,42 +284,6 @@ class DownloadWorker(threading.Thread):
                 self.q.put(("failed", reason, key))
         except Exception as e:
             self.q.put(("error", str(e), self.key))
-
-    def _prepare_visible(self):
-        try:
-            c = scanmod.Collector(OUT_JSON, scroll=True)
-            c._init_uia()
-            c._pick_profile()
-            return bool(c.find_card(self.key))
-        except Exception:
-            return False
-
-    def _send_play(self):
-        desc = (self.row.get("desc") or "")[:12]
-        sec = int(self.row.get("seconds") or 0)
-        args = [sys.executable.replace("pythonw.exe", "python.exe"),
-                SEND_TRIGGER, "--desc", desc, "--seconds", str(sec)]
-        like = self.row.get("like_int")
-        if like is not None:
-            args += ["--like", str(int(like))]
-        try:
-            p = run_hidden(args, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=45)
-            out = (p.stdout or "").strip().splitlines()
-            if not out:
-                return False, "no output"
-            r = json.loads(out[-1])
-            return bool(r.get("ok")), str(r.get("reason") or "")
-        except Exception as e:
-            return False, str(e)
-
-    def _send_close(self):
-        try:
-            run_hidden([sys.executable.replace("pythonw.exe", "python.exe"),
-                        SEND_TRIGGER, "--close-tab"],
-                       capture_output=True, text=True, timeout=30)
-        except Exception:
-            pass
 
     def _resolve(self):
         run_renderer_scan()
@@ -473,8 +387,7 @@ class DownloadWorker(threading.Thread):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        suffix = " (send-event)" if ACTIVATION == "send" else ""
-        self.title("视频号卡片 / 下载" + suffix)
+        self.title("视频号卡片 / 下载")
         self.geometry("1160x720")
         self.q = queue.Queue()
         self.lib = load_lib()

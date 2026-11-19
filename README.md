@@ -182,12 +182,6 @@ HUD 是只读覆盖层，不修改微信页面。
 > **它不是全功能主界面，只适合作者主页卡片列表。**
 > 普通用户请先看 [使用场景指南](docs/usage-guide.md)。
 
-实验入口（不替换原 viewer）：
-
-```text
-wx-viewer-send.vbs  → PostMessage 右键「播放」激活，失败回退 hover
-```
-
 ![wx-viewer 卡片列表](images/wx-viewer.png)
 
 启动：
