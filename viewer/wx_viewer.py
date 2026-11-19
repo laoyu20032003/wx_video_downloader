@@ -262,6 +262,7 @@ class DownloadWorker(threading.Thread):
                     f"找不到卡片：viewer序号={self.row.get('index')} "
                     f"目标={self.row.get('duration','')}|{self.row.get('like','')}|"
                     f"{(self.row.get('desc') or '')[:24]}；"
+                    f"定位={getattr(c, 'last_find_reason', '') or '未知'}；"
                     f"当前账号={d.get('account','?')}，UIA={d.get('cards')}张/"
                     f"可见{d.get('visible')}张，同时长{d.get('same_duration')}，"
                     f"时长+点赞{d.get('same_duration_like')}，前缀{d.get('same_prefix')}；"
@@ -409,6 +410,7 @@ class App(tk.Tk):
         self.page = 0
         self.page_size = 20
         self.current_account = None
+        self.last_error = ""
         self.progress = None
         self.worker = None
         self.scanner = None
@@ -459,8 +461,16 @@ class App(tk.Tk):
             foreground="#555")
         self.hint.pack(fill="x", padx=8, pady=(0, 2))
 
-        self.log = tk.Text(self, height=7, state="disabled")
+        logbar = tk.Frame(self)
+        logbar.pack(fill="x", padx=8)
+        ttk.Button(logbar, text="复制日志", command=self.copy_log).pack(side="left")
+        ttk.Button(logbar, text="复制最后错误", command=self.copy_error).pack(side="left", padx=6)
+        ttk.Label(logbar, text="日志可直接选中；Ctrl+C 也可复制全部",
+                  foreground="#777").pack(side="left", padx=8)
+
+        self.log = tk.Text(self, height=10, state="disabled")
         self.log.pack(fill="x", padx=8, pady=(0, 8))
+        self.log.bind("<Control-c>", lambda e: self.copy_log())
 
     def _progress(self, text):
         try:
@@ -482,6 +492,26 @@ class App(tk.Tk):
         self.log.insert("end", line + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def copy_log(self):
+        try:
+            text = self.log.get("1.0", "end").strip()
+            if not text:
+                text = "（暂无日志）"
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.status.configure(text="日志已复制")
+        except Exception as e:
+            self.status.configure(text="复制失败: " + str(e))
+
+    def copy_error(self):
+        try:
+            text = self.last_error or "（暂无错误）"
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.status.configure(text="最后错误已复制")
+        except Exception as e:
+            self.status.configure(text="复制失败: " + str(e))
 
     def start_scan(self, force=False):
         if self.worker and self.worker.is_alive():
@@ -538,6 +568,7 @@ class App(tk.Tk):
                         self.lib[row["key"]] = row
                         save_lib(self.lib)
                     self.status.configure(text="失败: " + item[1])
+                    self.last_error = item[1]
                     self.logline("ERROR " + item[1])
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
@@ -596,6 +627,7 @@ class App(tk.Tk):
                         self.lib[row["key"]] = row
                         save_lib(self.lib)
                     self.status.configure(text="失败: " + item[1])
+                    self.last_error = item[1]
                     self.logline("FAILED " + item[1])
                     self.render()
                     self.scan_btn.configure(state="normal")

@@ -99,6 +99,7 @@ class Collector:
         self.total_text = ""
         self.total_count = None
         self.account = ""
+        self.last_find_reason = ""
         self.profile = None
         self.window = None
         self.hwnd = 0
@@ -389,6 +390,7 @@ class Collector:
         The old read_elements() path enumerates 2000+ cards and takes ~20s.
         FindAll(Name=desc) is handled inside the UIA provider and takes <1s.
         """
+        self.last_find_reason = ""
         if self.profile is None:
             self._init_uia()
             self._pick_profile()
@@ -429,6 +431,7 @@ class Collector:
                         pass
                     continue
                 if len(cards) > 1:
+                    self.last_find_reason = f"同 key 候选 {len(cards)} 个，拒绝猜"
                     return None
                 break
         return self._find_card_full(key, tries=tries)
@@ -450,6 +453,7 @@ class Collector:
                                and c["like"] == parts[1]
                                and _desc_match(c.get("desc"), parts[2] if len(parts) > 2 else "")]
             if not matches:
+                self.last_find_reason = "当前 UIA 没有同 key/时长点赞/前缀候选"
                 return None
             if len(matches) > 1:
                 # 同 key 不唯一：再按时长+点赞+文案前缀缩小；仍不唯一则拒绝猜
@@ -459,10 +463,13 @@ class Collector:
                     if len(narrowed) == 1:
                         matches = narrowed
                     elif len(narrowed) > 1:
+                        self.last_find_reason = f"同 key 候选 {len(narrowed)} 个，拒绝猜"
                         return None
                     else:
+                        self.last_find_reason = "多个候选但文案前缀对不上"
                         return None
                 else:
+                    self.last_find_reason = f"同 key 候选 {len(matches)} 个，拒绝猜"
                     return None
             card = matches[0]
             if self._visible(card["rect"]):
@@ -476,6 +483,7 @@ class Collector:
             except Exception:
                 self._wheel(True)
             time.sleep(0.45)
+        self.last_find_reason = "找到候选但滚不到视口（UIA 滚屏可能被隔离）"
         return None
 
     def diagnose(self, key):

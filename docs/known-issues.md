@@ -1,4 +1,4 @@
-﻿# 已知问题与解决方案
+# 已知问题与解决方案
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -497,6 +497,8 @@ viewer/work/resolved_cards.json
 viewer/work/main_pairs.json
 viewer/work/mem_model2.json
 ```
+
+界面底部有「复制日志」「复制最后错误」按钮；日志也可以直接选中复制。定位失败会额外报告：账号、UIA 总数/可见数、同时长/同前缀候选、最接近的 3 个候选，以及“找到候选但滚不到视口”的原因。
 
 ### 单任务限制
 
