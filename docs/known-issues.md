@@ -925,7 +925,7 @@ SAVED=..._576p_258s.mp4
 
 限制：
 
-- 目标卡片必须在当前已加载/可见网格；off-screen 会失败并回退 hover；
+- send 模式会先用 UIA 把目标卡滚到可见视口；如果 UIA 滚屏也失效/目标滚不到，才回退 hover；
 - UIA 枚举全部卡片较慢（约 40–60 秒）；
 - 菜单项是 Text，只能坐标点击；
 - 有 seed：URL 绑定后立即关闭播放 tab，再下载；没有 seed/seed 全失败：先关闭播放 tab，回退 hover 取头；

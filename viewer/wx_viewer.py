@@ -245,8 +245,14 @@ class DownloadWorker(threading.Thread):
             send_need_hover = False
             if ACTIVATION == "send":
                 self.q.put(("rowstatus", key, "send"))
-                self.q.put(("status", "send-event 右键播放…"))
-                ok, why = self._send_play()
+                self.q.put(("status", "send-event：先把目标卡滚到视口…"))
+                if not self._prepare_visible():
+                    self.q.put(("status", "目标卡未能滚到视口，回退 hover"))
+                    send_need_hover = True
+                    ok, why = False, "目标卡不在视口"
+                else:
+                    self.q.put(("status", "send-event 右键播放…"))
+                    ok, why = self._send_play()
                 if ok:
                     time.sleep(2.0)
                     url = url0
@@ -327,6 +333,15 @@ class DownloadWorker(threading.Thread):
                 self.q.put(("failed", reason, key))
         except Exception as e:
             self.q.put(("error", str(e), self.key))
+
+    def _prepare_visible(self):
+        try:
+            c = scanmod.Collector(OUT_JSON, scroll=True)
+            c._init_uia()
+            c._pick_profile()
+            return bool(c.find_card(self.key))
+        except Exception:
+            return False
 
     def _send_play(self):
         desc = (self.row.get("desc") or "")[:12]
