@@ -1,4 +1,4 @@
-# wx-viewer（本项目版本）
+﻿# wx-viewer（本项目版本）
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -69,6 +69,39 @@ oid 15050086854154853712 seed 979861605
 3,566,401 bytes / 40.22s
 ```
 
+## 实验入口：`wx-viewer-send.vbs`
+
+保留原 `wx-viewer.vbs`（hover/seed 主路径），另提供实验入口：
+
+```powershell
+wscript wx-viewer-send.vbs
+```
+
+它用豆包的 **PostMessage send-event** 方式：
+
+```text
+UIA 找卡片
+→ PostMessage 右键卡片
+→ 点菜单「播放」
+→ 打开播放器
+→ 绑定 URL/seed
+→ 下载
+→ 关闭播放 tab
+```
+
+特点：
+
+- 不移动全局光标；
+- 卡片在当前已加载/可见区时成功率最高；
+- 目标卡片不可见/不在当前网格时，会回退原来的 hover 路径；
+- 实测一次成功：
+  ```text
+  send-event 右键播放…
+  send-event 后 seed 下载 oid=14441929253197781213
+  SAVED=..._576p_258s.mp4
+  ```
+- 单次触发较慢（UIA 枚举全部卡片约 40–60 秒），目前是实验功能；
+- 原 `wx-viewer.vbs` 的行为不变。
 ## 限制
 
 - 扫描会先滚到顶部并逐屏读取；**微信 4.2.0.53 的 CEF 网格可能隔离本地 Python 的合成滚轮/键盘**，此时自动翻页无效，只能读到当前已加载批次，需要手动滚动微信后再重新扫描；

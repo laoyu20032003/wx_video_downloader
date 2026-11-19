@@ -888,6 +888,48 @@ oid + 完整 20302 URL + decodeKey
 - 菜单项是 Text，无 InvokePattern，只能坐标点击；
 - 点播放会打开播放器，仍是桌面动作，不是 non-hover。
 
+## 13.13 实验：send-event 右键播放下载
+
+入口：
+
+```text
+wx-viewer-send.vbs
+```
+
+实现：
+
+```text
+PostMessage 右键卡片
+→ context-menu
+→ PostMessage 点「播放」
+→ 打开播放 tab
+→ 绑定 URL/seed
+→ 下载
+→ close-tab
+```
+
+实测：
+
+```text
+send-event 右键播放…
+send-event 后 seed 下载 oid=14441929253197781213
+SAVED=..._576p_258s.mp4
+```
+
+优点：
+
+- 不移动全局鼠标；
+- 不抢光标位置；
+- 精确到卡片右键菜单。
+
+限制：
+
+- 目标卡片必须在当前已加载/可见网格；off-screen 会失败并回退 hover；
+- UIA 枚举全部卡片较慢（约 40–60 秒）；
+- 菜单项是 Text，只能坐标点击；
+- 播放 tab 关闭后仍要保证 URL/seed 已拿到；
+- 仍是实验入口，原 `wx-viewer.vbs` 保持 hover/seed 主路径。
+
 ## 14. 目前无法可靠解决的问题
 
 1. **腾讯服务端限流**  
