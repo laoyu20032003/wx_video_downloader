@@ -1,4 +1,4 @@
-﻿# 已知问题与解决方案
+# 已知问题与解决方案
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -693,6 +693,19 @@ windows: 3
 current: 本轮快照 unmatched / no-progress（也出现过 matched，但不稳定）
 oid: None
 ```
+
+**2026-11-20 复验（当前播放窗口）**：
+
+```text
+UIA: 当前标题=耗时两年… / 作者=我是木子夫人 / 点赞=4.2万
+b-player-dump.py --scan
+→ feeds: 224
+→ pid=26232 progress=None
+→ match=no-progress-unmatched
+→ oid=None
+```
+
+feed 表里有作者 `我是木子夫人` 的其他视频，但没有当前标题这一条；所以“标题+作者回表”仍然失败。
 
 原因：
 
