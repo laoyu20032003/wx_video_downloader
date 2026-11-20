@@ -22,6 +22,25 @@ PROFILE_ROOT = os.path.join(APPDATA, "Tencent", "xwechat", "radium", "web", "pro
 WORK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work")
 COVER_DIR = os.path.join(WORK, "cache_covers")
 META_CSV = os.path.join(WORK, "cache_meta_entries.csv")
+MAP_PATH = os.path.join(WORK, "cache_cover_map.json")
+
+
+def load_map():
+    try:
+        with open(MAP_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_map(d):
+    try:
+        os.makedirs(WORK, exist_ok=True)
+        with open(MAP_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
 
 
 def _cache_dirs():
@@ -147,12 +166,13 @@ def collect(limit=None, baseline=None):
 
 
 def attach(cards, info):
-    """Attach cache cover by UIA index; keep screenshot fallback untouched."""
+    """Attach cache cover by UIA index; persist the key -> cover mapping."""
     covers = (info or {}).get("covers") or []
     if not covers:
         return 0
     by_idx = {c["idx"]: c for c in covers}
     attached = 0
+    saved = load_map()
     for card in cards:
         idx = card.get("index")
         if idx is None:
@@ -168,8 +188,38 @@ def attach(cards, info):
             card["cover_resource_code"] = c.get("resource_code")
             card["cover_encfilekey"] = c.get("encfilekey")
             card["cover_m"] = c.get("m")
+        if card.get("key"):
+            saved[card["key"]] = {
+                "path": c["path"], "file": c["file"],
+                "url": c.get("url") or "", "resource_code": c.get("resource_code") or "",
+                "encfilekey": c.get("encfilekey") or "", "m": c.get("m") or "",
+            }
         attached += 1
+    save_map(saved)
     return attached
+
+
+def attach_saved(cards, saved=None):
+    """Reattach covers saved by a previous scan, matched by slot key."""
+    saved = saved if saved is not None else load_map()
+    n = 0
+    for card in cards:
+        rec = saved.get(card.get("key") or "")
+        if not rec:
+            continue
+        path = rec.get("path") or ""
+        if not path or not os.path.exists(path):
+            continue
+        card["cache_cover_path"] = path
+        card["cover_source"] = "cef-cache"
+        card["cache_cover_file"] = rec.get("file") or ""
+        if rec.get("url"):
+            card["cover_url"] = rec["url"]
+            card["cover_resource_code"] = rec.get("resource_code") or ""
+            card["cover_encfilekey"] = rec.get("encfilekey") or ""
+            card["cover_m"] = rec.get("m") or ""
+        n += 1
+    return n
 
 
 def summary(info):

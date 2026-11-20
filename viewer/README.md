@@ -78,9 +78,18 @@ viewer 默认优先使用 CEF cache 的 `f_*` JPEG，但只接受**本次扫描�
 - 「优先使用 CEF cache 封面」默认勾选；
 - 「允许屏幕截图 fallback」默认勾选；
 - 本次扫描没有新增 cache 封面时，直接使用当前屏幕截图；
-- 状态/log 会显示 `cache_dir`、baseline 数量、本次新增唯一封面数、映射数，以及前几张的 `idx/f_*/resource_code/url`。
+- 第一次成功映射的封面会写入 `viewer/work/cache_cover_map.json`，按 `duration|like|desc` 保存；后续扫描会复用，不会因为 baseline 过滤又变成 0；
+- 状态/log 会显示 `cache_dir`、baseline 数量、本次新增唯一封面数、复用上次数量、映射数，以及前几张的 `idx/f_*/resource_code/url`。
 
 如果发现 cache 封面仍然错位，取消「优先使用 CEF cache 封面」，只用截图；截图 fallback 暂时保留。
+
+单行补封面：
+
+```text
+选中一行 → 补封面
+```
+
+它会 hover 1 秒，然后优先取本次新增 cache 封面，没有则截图；OID/URL 补到后会动态刷新该行。
 
 测试截图来源：
 
