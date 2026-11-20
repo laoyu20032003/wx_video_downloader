@@ -542,11 +542,10 @@ class App(tk.Tk):
     def start_scan(self, force=False):
         if self.worker and self.worker.is_alive():
             return
-        # 手动“重新扫描”必须清掉旧账号/旧页面的展示与缓存依赖。
-        if force:
-            self.cards = []
-            self.page = 0
-            self.tree.delete(*self.tree.get_children())
+        # 每次扫描都先清空旧列表，避免自动扫描失败时继续显示上一个账号/上一次的卡片
+        self.cards = []
+        self.page = 0
+        self.tree.delete(*self.tree.get_children())
         self.scan_btn.configure(state="disabled")
         self.dl_btn.configure(state="disabled")
         self.status.configure(text="采集中…")
@@ -599,6 +598,11 @@ class App(tk.Tk):
                     self.status.configure(text="失败: " + item[1])
                     self.last_error = item[1]
                     self.logline("ERROR " + item[1])
+                    if len(item) <= 2:
+                        # 扫描失败时不要继续显示上一次的旧卡片
+                        self.cards = []
+                        self.page = 0
+                        self.render()
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
                     self.render()
