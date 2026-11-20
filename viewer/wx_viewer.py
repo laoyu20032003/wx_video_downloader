@@ -527,7 +527,34 @@ class App(tk.Tk):
         self.log.configure(state="disabled")
 
     def on_cover_toggle(self):
-        self.render()
+        # 只刷新封面列，保留每行的值、选择和页面
+        self.refresh_covers()
+
+    def _photo_for(self, c):
+        p = ""
+        if self.use_cache_cover.get() and c.get("cache_cover_path"):
+            p = c["cache_cover_path"]
+        elif self.allow_screenshot.get() and c.get("screenshot_cover_path"):
+            p = c["screenshot_cover_path"]
+        if not p or not os.path.exists(p):
+            return None
+        try:
+            im = Image.open(p)
+            im.thumbnail((64, 90))
+            photo = ImageTk.PhotoImage(im)
+            self.photos.append(photo)
+            return photo
+        except Exception:
+            return None
+
+    def refresh_covers(self):
+        self.photos = []
+        start = self.page * self.page_size
+        for off, item in enumerate(self.tree.get_children()):
+            idx = start + off
+            if idx >= len(self.cards):
+                break
+            self.tree.item(item, image=self._photo_for(self.cards[idx]))
 
     def copy_log(self):
         try:
@@ -764,20 +791,7 @@ class App(tk.Tk):
         subset = self.cards[start:start + self.page_size]
         for off, c in enumerate(subset):
             i = start + off
-            photo = None
-            p = ""
-            if self.use_cache_cover.get() and c.get("cache_cover_path"):
-                p = c["cache_cover_path"]
-            elif self.allow_screenshot.get() and c.get("screenshot_cover_path"):
-                p = c["screenshot_cover_path"]
-            if p and os.path.exists(p):
-                try:
-                    im = Image.open(p)
-                    im.thumbnail((64, 90))
-                    photo = ImageTk.PhotoImage(im)
-                    self.photos.append(photo)
-                except Exception:
-                    photo = None
+            photo = self._photo_for(c)
             st = c.get("status", "pending")
             self.tree.insert("", "end", image=photo, values=(
                 i + 1, c.get("duration", ""), c.get("like", ""), st,

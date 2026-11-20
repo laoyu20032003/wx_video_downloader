@@ -727,6 +727,7 @@ class Collector:
             if key not in self.cards:
                 c["page"] = page + 1
                 c["cover_path"] = self._capture_cover(c)
+                c["cover_source"] = "screenshot" if c["cover_path"] else ""
                 c["first_seen"] = now
                 self.cards[key] = c
                 new += 1
