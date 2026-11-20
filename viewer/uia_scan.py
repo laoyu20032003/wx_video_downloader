@@ -655,7 +655,19 @@ class Collector:
         USER32.SetCursorPos(x, y)
         time.sleep(0.25)
 
+    def _content_scroll(self):
+        top, boxes, wr = self._grid_boxes()
+        return self._scroll_pattern(top, boxes, wr)
+
     def _reset_top(self, steps=30):
+        try:
+            sp = self._content_scroll()
+            if sp is not None:
+                sp.SetScrollPercent(-1, 0)
+                time.sleep(0.45)
+                return
+        except Exception:
+            pass
         self._focus()
         for _ in range(steps):
             self._wheel(False)
@@ -663,6 +675,15 @@ class Collector:
         time.sleep(0.3)
 
     def _wheel(self, down=True):
+        try:
+            sp = self._content_scroll()
+            if sp is not None:
+                sp.Scroll(U.ScrollAmount_NoAmount,
+                          U.ScrollAmount_LargeIncrement if down else U.ScrollAmount_LargeDecrement)
+                time.sleep(0.35)
+                return
+        except Exception:
+            pass
         delta = -900 if down else 900
         USER32.mouse_event(0x0800, 0, 0, delta, 0)
 

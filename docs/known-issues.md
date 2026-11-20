@@ -810,8 +810,8 @@ wx-dl.ps1 仍走“扫描内存明文头 + 拼接”路线
 
 对本项目的含义：
 
-- `wx-viewer` 的滚轮注入在部分环境下会失效；但 `content` 祖先的 UIA `ScrollPattern` 可用，`scroll_to_key` 不依赖鼠标；
-- 失效时 UIA 树只有**当前已加载批次**（约 30 张），不是作者主页全量；
+- `wx-viewer` 的扫描分页和 `find_card` 现在都优先用 `content` 祖先的 UIA `ScrollPattern`，不依赖鼠标；只有取不到 pattern 时才回退滚轮；
+- ScrollPattern 可用的环境可以滚到完整已加载序列；若某些版本没有这个 pattern，才只能读到当前批次；
 - 手动滚动微信后，再点「重新扫描」可以并入下一批；
 - 不要用 `wx-viewer` 做“自动翻完作者主页”的承诺；
 - 作者主页全量批量仍应使用 `wx-gui` 的播放器连播。
