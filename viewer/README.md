@@ -30,6 +30,7 @@ pythonw viewer\wx_viewer.py
 - 切换视频号账号/作者主页后点「重新扫描」：清空旧列表、强制重扫 renderer/主进程，避免旧账号的 oid/URL 串到新列表；
 - `ready` 行：有 seed 则直接自解密；没有 seed 才 hover 8 秒取明文头后下载；
 - `pending` 行：点击后自动 hover 8 秒，重扫 renderer/主进程，按 oid/index/时长/点赞重新绑定，成功后再下载；
+- 表格新增 `OID` 列；hover/重绑后如果补到 oid，会动态刷新该行；
 - 扫描时左上角显示「视频号扫描」进度窗；主窗口暂时隐藏，避免遮住封面；
 - 底部日志可选中复制，另有「复制日志」「复制最后错误」按钮；
 - 10 分钟内的 renderer/主进程结果会复用，避免每次重扫。
@@ -80,6 +81,16 @@ viewer 默认优先使用 CEF cache 的 `f_*` JPEG，但只接受**本次扫描�
 - 状态/log 会显示 `cache_dir`、baseline 数量、本次新增唯一封面数、映射数，以及前几张的 `idx/f_*/resource_code/url`。
 
 如果发现 cache 封面仍然错位，取消「优先使用 CEF cache 封面」，只用截图；截图 fallback 暂时保留。
+
+测试截图来源：
+
+```text
+取消「允许屏幕截图 fallback」
+→ 如果封面消失，说明该行原本是截图
+→ 如果仍显示，说明是 cache
+```
+
+OID 列会在 hover/重新绑定后动态回填，不需要重新扫描。
 
 离线恢复 cover URL：
 

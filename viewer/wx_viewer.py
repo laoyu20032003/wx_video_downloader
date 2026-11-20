@@ -298,6 +298,8 @@ class DownloadWorker(threading.Thread):
             if not complete_url(url):
                 self.q.put(("status", "重新扫描 oid ↔ URL…"))
                 url, oid = self._refresh_binding()
+                if oid:
+                    self.q.put(("oid", key, oid))
                 if not complete_url(url):
                     self.q.put(("error", "hover 后仍没有可绑定的完整 URL", key))
                     return
@@ -321,6 +323,7 @@ class DownloadWorker(threading.Thread):
         idx = self.row.get("index")
         rows = self._resolve()
         rec = next((x for x in rows if x.get("index") == idx), None)
+        oid_hint = rec.get("object_id") if rec else None
         if rec and complete_url(clean_text(rec.get("url") or "")):
             return clean_text(rec["url"]), rec.get("object_id")
 
@@ -330,9 +333,10 @@ class DownloadWorker(threading.Thread):
             json.dump({"pid": pid, "rows": pairs}, f, ensure_ascii=False)
         rows = self._resolve()
         rec = next((x for x in rows if x.get("index") == idx), None)
-        if rec and complete_url(clean_text(rec.get("url") or "")):
-            return clean_text(rec["url"]), rec.get("object_id")
-        return "", None
+        if rec:
+            return (clean_text(rec.get("url") or ""),
+                    rec.get("object_id") or oid_hint)
+        return "", oid_hint
 
     def _try_seeds(self, url, oid):
         seeds = ensure_seeds().get(str(oid), [])
@@ -458,21 +462,24 @@ class App(tk.Tk):
         opts = tk.Frame(self)
         opts.pack(fill="x", padx=10, pady=(0, 2))
         ttk.Checkbutton(opts, text="优先使用 CEF cache 封面",
-                        variable=self.use_cache_cover).pack(side="left")
+                        variable=self.use_cache_cover,
+                        command=self.on_cover_toggle).pack(side="left")
         ttk.Checkbutton(opts, text="允许屏幕截图 fallback",
-                        variable=self.allow_screenshot).pack(side="left", padx=10)
+                        variable=self.allow_screenshot,
+                        command=self.on_cover_toggle).pack(side="left", padx=10)
         self.cache_status = ttk.Label(opts, text="cache: -", foreground="#666")
         self.cache_status.pack(side="left", padx=8)
 
         style = ttk.Style(self)
         style.configure("Treeview", rowheight=96)
         self.tree = ttk.Treeview(self, show="tree headings",
-                                 columns=("seq", "dur", "like", "status", "act", "desc"))
+                                 columns=("seq", "dur", "like", "status", "oid", "act", "desc"))
         self.tree.heading("#0", text="封面")
         self.tree.column("#0", width=72, anchor="center")
         for c, t, w in (("seq", "序号", 50), ("dur", "时长", 65),
-                        ("like", "点赞", 65), ("status", "状态", 85),
-                        ("act", "操作", 70), ("desc", "文案", 700)):
+                        ("like", "点赞", 65), ("status", "状态", 80),
+                        ("oid", "OID", 150), ("act", "操作", 65),
+                        ("desc", "文案", 520)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w")
         self.tree.column("act", anchor="center")
@@ -518,6 +525,9 @@ class App(tk.Tk):
         self.log.insert("end", line + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def on_cover_toggle(self):
+        self.render()
 
     def copy_log(self):
         try:
@@ -633,6 +643,15 @@ class App(tk.Tk):
                     self.status.configure(text=item[1])
                     self._progress(item[1])
                     self.logline(item[1])
+                elif kind == "oid":
+                    _, rk, oid = item
+                    row = self.row_by_key(rk)
+                    if row and oid:
+                        row["object_id"] = oid
+                        self.lib[row["key"]] = row
+                        save_lib(self.lib)
+                        self.logline(f"OID 已回填: {oid}")
+                        self.render()
                 elif kind == "bound":
                     d = item[1]
                     row = self.row_by_key(d.get("key")) or self.selected()
@@ -697,6 +716,9 @@ class App(tk.Tk):
         changed = bool(self.current_account and new_account != self.current_account)
         self.current_account = new_account
         self.cards = snap.get("cards", [])
+        for c in self.cards:
+            # 保留两种来源：渲染时按当前 checkbox 动态选择
+            c["screenshot_cover_path"] = c.get("cover_path") or ""
         if changed:
             self.page = 0
             self.logline(f"账号已切换: {new_account}，已清空旧列表状态")
@@ -743,7 +765,11 @@ class App(tk.Tk):
         for off, c in enumerate(subset):
             i = start + off
             photo = None
-            p = c.get("cover_path") or ""
+            p = ""
+            if self.use_cache_cover.get() and c.get("cache_cover_path"):
+                p = c["cache_cover_path"]
+            elif self.allow_screenshot.get() and c.get("screenshot_cover_path"):
+                p = c["screenshot_cover_path"]
             if p and os.path.exists(p):
                 try:
                     im = Image.open(p)
@@ -755,7 +781,7 @@ class App(tk.Tk):
             st = c.get("status", "pending")
             self.tree.insert("", "end", image=photo, values=(
                 i + 1, c.get("duration", ""), c.get("like", ""), st,
-                "下载", (c.get("desc") or "")[:110]))
+                c.get("object_id") or "", "下载", (c.get("desc") or "")[:110]))
 
     def prev_page(self):
         if self.page > 0:
@@ -771,7 +797,7 @@ class App(tk.Tk):
     def on_tree_click(self, event):
         if self.tree.identify_region(event.x, event.y) != "cell":
             return
-        if self.tree.identify_column(event.x) != "#5":
+        if self.tree.identify_column(event.x) != "#6":
             return
         rid = self.tree.identify_row(event.y)
         if not rid:

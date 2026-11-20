@@ -160,7 +160,7 @@ def attach(cards, info):
         c = by_idx.get(int(idx))
         if not c:
             continue
-        card["cover_path"] = c["path"]
+        card["cache_cover_path"] = c["path"]
         card["cover_source"] = "cef-cache"
         card["cache_cover_file"] = c["file"]
         if c.get("url"):
