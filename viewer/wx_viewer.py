@@ -37,6 +37,7 @@ sys.path.insert(0, HERE)
 import uia_scan as scanmod
 import main_pairs
 import mem_render
+import cache_covers
 
 
 def load_lib():
@@ -164,21 +165,33 @@ def run_resolve():
 
 
 class ScanWorker(threading.Thread):
-    def __init__(self, q, force=False):
+    def __init__(self, q, force=False, capture_screenshots=True, use_cache=True):
         super().__init__(daemon=True)
         self.q = q
         self.force = force
+        self.capture_screenshots = capture_screenshots
+        self.use_cache = use_cache
         self.collector = None
 
     def run(self):
         try:
             c = scanmod.Collector(
                 OUT_JSON, wait=0.75, max_pages=50, scroll=True,
-                restore=True, cap=False, capture_covers=True)
+                restore=True, cap=False, capture_covers=self.capture_screenshots)
             self.collector = c
             def on_step(step, snap):
                 self.q.put(("step", step, snap))
             snap = c.run(on_step)
+
+            if self.use_cache:
+                self.q.put(("status", "读取 CEF cache 封面…"))
+                try:
+                    info = cache_covers.collect()
+                    snap["cache_cover"] = info
+                    attached = cache_covers.attach(snap.get("cards") or [], info)
+                    self.q.put(("cache_info", cache_covers.summary(info), attached, info))
+                except Exception as e:
+                    self.q.put(("cache_info", "cache 封面失败: " + str(e), 0, {}))
 
             # 跨层绑定：renderer 记录（oid/index/时长/点赞） + 主进程完整 URL
             self.q.put(("status", "扫描 renderer 模型…"))
@@ -411,6 +424,8 @@ class App(tk.Tk):
         self.page_size = 20
         self.current_account = None
         self.last_error = ""
+        self.use_cache_cover = tk.BooleanVar(value=True)
+        self.allow_screenshot = tk.BooleanVar(value=True)
         self.progress = None
         self.worker = None
         self.scanner = None
@@ -437,6 +452,15 @@ class App(tk.Tk):
         self.page_label.pack(side="left")
         self.next_btn.pack(side="left", padx=2)
         self.status.pack(side="left", padx=8)
+
+        opts = tk.Frame(self)
+        opts.pack(fill="x", padx=10, pady=(0, 2))
+        ttk.Checkbutton(opts, text="优先使用 CEF cache 封面",
+                        variable=self.use_cache_cover).pack(side="left")
+        ttk.Checkbutton(opts, text="允许屏幕截图 fallback",
+                        variable=self.allow_screenshot).pack(side="left", padx=10)
+        self.cache_status = ttk.Label(opts, text="cache: -", foreground="#666")
+        self.cache_status.pack(side="left", padx=8)
 
         style = ttk.Style(self)
         style.configure("Treeview", rowheight=96)
@@ -536,7 +560,10 @@ class App(tk.Tk):
             self.progress_label.pack(fill="both", expand=True, padx=12, pady=12)
         self.progress.deiconify()
         self.progress_label.configure(text="准备扫描…")
-        self.scanner = ScanWorker(self.q, force=force)
+        self.scanner = ScanWorker(
+            self.q, force=force,
+            capture_screenshots=self.allow_screenshot.get(),
+            use_cache=self.use_cache_cover.get())
         self.scanner.start()
 
     def stop(self):
@@ -583,6 +610,19 @@ class App(tk.Tk):
                     if row:
                         row["status"] = rs
                         self.render()
+                elif kind == "cache_info":
+                    msg, attached, info = item[1], item[2], item[3]
+                    self.cache_status.configure(
+                        text=f"cache 封面: 映射 {attached} 张" if info.get("ok") else "cache: 无")
+                    self.logline(msg + f"；映射 {attached} 张")
+                    for c in (info.get("covers") or [])[:8]:
+                        if c.get("url"):
+                            self.logline(
+                                f"cache idx={c.get('idx')} file={c.get('file')} "
+                                f"code={c.get('resource_code')} url={c.get('url')[:140]}")
+                        else:
+                            self.logline(
+                                f"cache idx={c.get('idx')} file={c.get('file')} url=（无离线元数据）")
                 elif kind == "status":
                     self.status.configure(text=item[1])
                     self._progress(item[1])

@@ -70,6 +70,37 @@ oid 15050086854154853712 seed 979861605
 3,566,401 bytes / 40.22s
 ```
 
+## CEF cache 封面
+
+viewer 默认优先使用 CEF cache 的 `f_*` JPEG，屏幕截图作为 fallback：
+
+- 「优先使用 CEF cache 封面」默认勾选；
+- 「允许屏幕截图 fallback」默认勾选；
+- 全部 cache 封面缺失时，才截当前卡片；
+- 状态/log 会显示 `cache_dir`、唯一封面数、映射数，以及前几张的 `idx/f_*/resource_code/url`。
+
+离线恢复 cover URL：
+
+```powershell
+# 先关闭微信，释放 Cache_Data/index
+python viewer\cache_meta_parse.py
+```
+
+输出：
+
+```text
+viewer/work/cache_meta_entries.csv
+viewer/work/cache_meta_entries.json
+```
+
+下次扫描会按 `payload_path` 的 `f_*` 文件名把 20304/20350 URL 映射到封面；`token` 会过期，只用于展示/资源匹配，资源级去重看 `encfilekey + m`。
+
+注意：
+
+- cache 是所有历史/页面 JPEG 的集合，`UIA index -> JPEG` 目前是顺序近似；
+- 不是每次都能精确对应；所以截图 fallback 暂时保留；
+- 测试稳定后再去掉截图 fallback。
+
 ## 限制
 
 - 扫描会先滚到顶部并逐屏读取；**微信 4.2.0.53 的 CEF 网格可能隔离本地 Python 的合成滚轮/键盘**，但 `find_card` 会用祖先 `class=content` 的 UIA `ScrollPattern` 精确滚到目标卡；只有目标不在当前 UIA 序列/ScrollPattern 不可用时才需要手动滚动；
@@ -107,5 +138,7 @@ viewer/work/mem_model2.json
 - `resolve.py`：跨层绑定解析
 - `seed_scan.py`：从 kvReport 串提取 `oid → decodeKey`
 - `isaac64.py` / `dl_engine.py`：seed 自解密与校验
+- `cache_covers.py`：CEF `f_*` 封面 + URL 映射
+- `cache_meta_parse.py`：离线解析 CEF blockfile 元数据
 - `../wx-viewer.vbs`：无控制台启动器
 
