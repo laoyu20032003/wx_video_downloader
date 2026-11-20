@@ -1,4 +1,4 @@
-﻿# wx-viewer（本项目版本）
+# wx-viewer（本项目版本）
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -72,12 +72,14 @@ oid 15050086854154853712 seed 979861605
 
 ## CEF cache 封面
 
-viewer 默认优先使用 CEF cache 的 `f_*` JPEG，屏幕截图作为 fallback：
+viewer 默认优先使用 CEF cache 的 `f_*` JPEG，但只接受**本次扫描期间新增的 f_* 文件**，不会拿历史缓存按 index 硬套：
 
 - 「优先使用 CEF cache 封面」默认勾选；
 - 「允许屏幕截图 fallback」默认勾选；
-- 全部 cache 封面缺失时，才截当前卡片；
-- 状态/log 会显示 `cache_dir`、唯一封面数、映射数，以及前几张的 `idx/f_*/resource_code/url`。
+- 本次扫描没有新增 cache 封面时，直接使用当前屏幕截图；
+- 状态/log 会显示 `cache_dir`、baseline 数量、本次新增唯一封面数、映射数，以及前几张的 `idx/f_*/resource_code/url`。
+
+如果发现 cache 封面仍然错位，取消「优先使用 CEF cache 封面」，只用截图；截图 fallback 暂时保留。
 
 离线恢复 cover URL：
 

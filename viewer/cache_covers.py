@@ -77,7 +77,19 @@ def load_url_map():
     return out
 
 
-def collect(limit=None):
+def snapshot():
+    """Names of f_* files present before a scan."""
+    dirs = _cache_dirs()
+    if not dirs:
+        return set()
+    _, _, cache_dir = dirs[0]
+    try:
+        return {os.path.basename(p) for p in glob.glob(os.path.join(cache_dir, "f_*"))}
+    except OSError:
+        return set()
+
+
+def collect(limit=None, baseline=None):
     """Collect unique JPEG covers from the newest active CEF cache."""
     dirs = _cache_dirs()
     if not dirs:
@@ -88,7 +100,10 @@ def collect(limit=None):
     files = []
     for p in glob.glob(os.path.join(cache_dir, "f_*")):
         try:
-            files.append((os.path.getmtime(p), os.path.basename(p), p))
+            name = os.path.basename(p)
+            if baseline is not None and name in baseline:
+                continue
+            files.append((os.path.getmtime(p), name, p))
         except OSError:
             pass
     files.sort()

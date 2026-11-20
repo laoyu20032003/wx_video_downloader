@@ -179,6 +179,7 @@ class ScanWorker(threading.Thread):
                 OUT_JSON, wait=0.75, max_pages=50, scroll=True,
                 restore=True, cap=False, capture_covers=self.capture_screenshots)
             self.collector = c
+            cache_baseline = cache_covers.snapshot() if self.use_cache else None
             def on_step(step, snap):
                 self.q.put(("step", step, snap))
             snap = c.run(on_step)
@@ -186,7 +187,8 @@ class ScanWorker(threading.Thread):
             if self.use_cache:
                 self.q.put(("status", "读取 CEF cache 封面…"))
                 try:
-                    info = cache_covers.collect()
+                    info = cache_covers.collect(baseline=cache_baseline)
+                    info["baseline"] = len(cache_baseline or ())
                     snap["cache_cover"] = info
                     attached = cache_covers.attach(snap.get("cards") or [], info)
                     self.q.put(("cache_info", cache_covers.summary(info), attached, info))
@@ -614,7 +616,7 @@ class App(tk.Tk):
                     msg, attached, info = item[1], item[2], item[3]
                     self.cache_status.configure(
                         text=f"cache 封面: 映射 {attached} 张" if info.get("ok") else "cache: 无")
-                    self.logline(msg + f"；映射 {attached} 张")
+                    self.logline(msg + f"；映射 {attached} 张；baseline={info.get('baseline','?')}")
                     for c in (info.get("covers") or [])[:8]:
                         if c.get("url"):
                             self.logline(
