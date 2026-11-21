@@ -1,0 +1,5 @@
+requests>=2.31,<3
+comtypes>=1.4
+psutil>=5.9
+Pillow>=10
+mitmproxy>=10

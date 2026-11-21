@@ -27,10 +27,14 @@
 
 ## 环境要求
 
+完整步骤见 [安装说明](docs/installation.md)。
+
 | 依赖 | 说明 |
 |---|---|
 | Windows 10/11 | 需要 `curl.exe`（系统自带） |
-| 微信 PC 4.2.x | 已在 4.2.0.13 验证 |
+| 微信 PC 4.2.x | 已在 4.2.0.53 验证 |
+| Python 3.14 | 安装路径默认 `%LOCALAPPDATA%\Programs\Python\Python314` |
+| Python 包 | `pip install -r requirements.txt`；**`requests` 必须安装** |
 | PowerShell 5.1 或 7+ | 启动器优先用 `pwsh` |
 | [mitmproxy](https://mitmproxy.org/) | 提供 `mitmdump`；`pip install mitmproxy` |
 | ffmpeg / ffprobe | 用于解码校验；需在 PATH 中 |

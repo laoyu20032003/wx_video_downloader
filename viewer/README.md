@@ -1,4 +1,4 @@
-﻿# wx-viewer（本项目版本）
+# wx-viewer（本项目版本）
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -22,6 +22,8 @@ pythonw viewer\wx_viewer.py
 ```
 
 依赖：Python 3.14、comtypes、psutil、Pillow、tkinter、requests、pwsh、curl、ffmpeg/ffprobe。
+
+安装步骤和 `requests` 排查见 [安装说明](../docs/installation.md)。
 
 ## 功能
 
