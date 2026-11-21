@@ -11,6 +11,7 @@
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -133,6 +134,62 @@ def run_hidden(args, **kwargs):
         si.wShowWindow = 0  # SW_HIDE
         kwargs.setdefault("startupinfo", si)
     return subprocess.run(args, **kwargs)
+
+
+def add_cover_frame(video_path, cover_path):
+    """Prepend one cache-cover frame; returns a new *_cover.mp4 or "".
+
+    The original file is never modified. This is optional and only called
+    when the user checked “下载后加封面” and a verified cache cover exists.
+    """
+    if not video_path or not cover_path or not os.path.exists(video_path) or not os.path.exists(cover_path):
+        return ""
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        return ""
+    try:
+        wh = run_hidden(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,avg_frame_rate",
+             "-of", "csv=p=0", video_path],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="ignore", timeout=30).stdout.strip().splitlines()
+        parts = wh[0].split(",") if wh else []
+        w, h = int(parts[0]), int(parts[1])
+        rate = parts[2] if len(parts) > 2 else "30/1"
+        num, den = (rate.split("/") + ["1"])[:2]
+        fps = float(num) / float(den or 1)
+        if fps <= 1 or fps > 120:
+            fps = 30.0
+        frame_t = max(1 / fps, 0.02)
+        stem, ext = os.path.splitext(video_path)
+        out = stem + "_cover" + (ext or ".mp4")
+        if os.path.exists(out):
+            os.remove(out)
+        vf = (
+            f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},setsar=1,fps={fps:.6f},"
+            f"trim=duration={frame_t:.6f},setpts=PTS-STARTPTS[v0];"
+            f"[1:v]setpts=PTS-STARTPTS[v1];"
+            f"[v0][v1]concat=n=2:v=1:a=0[v]"
+        )
+        p = run_hidden([
+            ffmpeg, "-y", "-loop", "1", "-framerate", f"{fps:.6f}",
+            "-i", cover_path, "-i", video_path,
+            "-filter_complex", vf, "-map", "[v]", "-map", "1:a?",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-c:a", "copy",
+            "-movflags", "+faststart", out,
+        ], capture_output=True, text=True, encoding="utf-8",
+           errors="replace", timeout=900)
+        if p.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 1024:
+            return out
+        if os.path.exists(out):
+            os.remove(out)
+        return ""
+    except Exception:
+        return ""
 
 
 def fresh(path, seconds):
@@ -297,11 +354,27 @@ class CoverWorker(threading.Thread):
 class DownloadWorker(threading.Thread):
     """Per-row downloader. Pending rows are hovered for 8s, then rebound by oid/index."""
 
-    def __init__(self, q, row):
+    def __init__(self, q, row, add_cover=False):
         super().__init__(daemon=True)
         self.q = q
         self.row = row
         self.key = row.get("key")
+        self.add_cover = bool(add_cover)
+        self.cover_path = row.get("cache_cover_path") if self.add_cover else ""
+
+    def _maybe_cover(self, saved):
+        if not saved or not self.add_cover:
+            return saved
+        if not self.cover_path or not os.path.exists(self.cover_path):
+            self.q.put(("status", "没有已验证的 cache 封面，保留原视频"))
+            return saved
+        self.q.put(("status", "正在插入 cache 封面帧（保留原视频）…"))
+        out = add_cover_frame(saved, self.cover_path)
+        if out:
+            self.q.put(("status", "封面帧已写入: " + os.path.basename(out)))
+            return out
+        self.q.put(("status", "封面帧写入失败，保留原视频"))
+        return saved
 
     def run(self):
         try:
@@ -316,6 +389,7 @@ class DownloadWorker(threading.Thread):
                     self.q.put(("bound", {"key": key, "object_id": oid0, "url": url0}))
                     saved, reason = self._try_seeds(url0, oid0)
                     if saved:
+                        saved = self._maybe_cover(saved)
                         self.q.put(("saved", {"key": key, "file": saved,
                                               "object_id": oid0, "url": url0}))
                         return
@@ -364,6 +438,7 @@ class DownloadWorker(threading.Thread):
             self.q.put(("status", "下载中（wx-dl）…"))
             saved, reason = self._download(url, oid or "slot", self.row)
             if saved:
+                saved = self._maybe_cover(saved)
                 self.q.put(("saved", {"key": key, "file": saved,
                                       "object_id": oid, "url": url}))
             else:
@@ -486,6 +561,7 @@ class App(tk.Tk):
         self.last_error = ""
         self.use_cache_cover = tk.BooleanVar(value=True)
         self.allow_screenshot = tk.BooleanVar(value=True)
+        self.add_cover = tk.BooleanVar(value=False)
         self.progress = None
         self.worker = None
         self.scanner = None
@@ -517,6 +593,8 @@ class App(tk.Tk):
         ttk.Checkbutton(opts, text="允许屏幕截图 fallback",
                         variable=self.allow_screenshot,
                         command=self.on_cover_toggle).pack(side="left", padx=10)
+        ttk.Checkbutton(opts, text="下载后加封面（仅 cache）",
+                        variable=self.add_cover).pack(side="left", padx=10)
         self.cache_status = ttk.Label(opts, text="cache: -", foreground="#666")
         self.cache_status.pack(side="left", padx=8)
 
@@ -540,7 +618,7 @@ class App(tk.Tk):
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree_scroll.pack(side="right", fill="y")
         self.tree.bind("<Button-1>", self.on_tree_click)
-        self.tree.bind("<Double-1>", lambda e: self.download_selected())
+        self.tree.bind("<Double-1>", lambda e: self.activate_selected())
 
         self.hint = ttk.Label(
             self,
@@ -865,9 +943,10 @@ class App(tk.Tk):
         for i, c in enumerate(self.cards):
             photo = self._photo_for(c)
             st = c.get("status", "pending")
+            act = "打开" if st == "done" and c.get("file") and os.path.exists(c["file"]) else "下载"
             self.tree.insert("", "end", image=photo, values=(
                 i + 1, c.get("duration", ""), c.get("like", ""), st,
-                c.get("object_id") or "", "下载", (c.get("desc") or "")[:110]))
+                c.get("object_id") or "", act, (c.get("desc") or "")[:110]))
 
     def on_tree_click(self, event):
         if self.tree.identify_region(event.x, event.y) != "cell":
@@ -880,7 +959,11 @@ class App(tk.Tk):
         i = self.tree.index(rid)
         if 0 <= i < len(self.cards):
             self.tree.selection_set(rid)
-            self.download_row(self.cards[i])
+            row = self.cards[i]
+            if row.get("status") == "done" and row.get("file") and os.path.exists(row["file"]):
+                self.open_file(row["file"])
+            else:
+                self.download_row(row)
 
     def selected(self):
         items = self.tree.selection()
@@ -914,6 +997,21 @@ class App(tk.Tk):
             use_cache=self.use_cache_cover.get())
         self.worker.start()
 
+    def open_file(self, path):
+        try:
+            subprocess.Popen(["explorer.exe", "/select,", os.path.normpath(path)])
+        except Exception as e:
+            self.status.configure(text="打开失败: " + str(e))
+
+    def activate_selected(self):
+        row = self.selected()
+        if not row:
+            return
+        if row.get("status") == "done" and row.get("file") and os.path.exists(row["file"]):
+            self.open_file(row["file"])
+        else:
+            self.download_selected()
+
     def download_selected(self):
         row = self.selected()
         if not row:
@@ -933,7 +1031,7 @@ class App(tk.Tk):
         row["status"] = "queued"
         row["account"] = self.current_account
         self.render()
-        self.worker = DownloadWorker(self.q, dict(row))
+        self.worker = DownloadWorker(self.q, dict(row), add_cover=self.add_cover.get())
         self.worker.start()
 
 
