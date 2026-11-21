@@ -28,6 +28,7 @@ pythonw viewer\wx_viewer.py
 - UIA 卡片：序号 / 时长 / 点赞 / 文案 / 封面 / 状态；
 - 每行有「下载」操作；
 - 切换视频号账号/作者主页后点「重新扫描」：清空旧列表、强制重扫 renderer/主进程，避免旧账号的 oid/URL 串到新列表；
+- 列表不再分页：全部卡片放在一个可滚动 Treeview 里，几百行由 Tk 滚动条承载；
 - `ready` 行：有 seed 则直接自解密；没有 seed 才 hover 8 秒取明文头后下载；
 - `pending` 行：点击后自动 hover 8 秒，重扫 renderer/主进程，按 oid/index/时长/点赞重新绑定，成功后再下载；
 - 表格新增 `OID` 列；hover/重绑后如果补到 oid，会动态刷新该行；

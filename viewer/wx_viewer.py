@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """视频号卡片列表 / 封面 / 按卡激活下载（独立于微信主界面）。
 
 流程：
@@ -475,8 +475,6 @@ class App(tk.Tk):
         self.log_path = os.path.join(WORK, "viewer.log")
         self.cards = []
         self.photos = []
-        self.page = 0
-        self.page_size = 20
         self.current_account = None
         self.last_error = ""
         self.use_cache_cover = tk.BooleanVar(value=True)
@@ -497,17 +495,11 @@ class App(tk.Tk):
         self.stop_btn = ttk.Button(bar, text="停止", command=self.stop)
         self.status = ttk.Label(bar, text="准备")
         self.account = ttk.Label(bar, text="账号: -")
-        self.prev_btn = ttk.Button(bar, text="上一页", command=self.prev_page)
-        self.next_btn = ttk.Button(bar, text="下一页", command=self.next_page)
-        self.page_label = ttk.Label(bar, text="1/1")
         self.scan_btn.pack(side="left")
         self.dl_btn.pack(side="left", padx=6)
         self.cover_btn.pack(side="left")
         self.stop_btn.pack(side="left", padx=6)
         self.account.pack(side="left", padx=12)
-        self.prev_btn.pack(side="left", padx=(8, 2))
-        self.page_label.pack(side="left")
-        self.next_btn.pack(side="left", padx=2)
         self.status.pack(side="left", padx=8)
 
         opts = tk.Frame(self)
@@ -523,7 +515,9 @@ class App(tk.Tk):
 
         style = ttk.Style(self)
         style.configure("Treeview", rowheight=96)
-        self.tree = ttk.Treeview(self, show="tree headings",
+        tree_wrap = tk.Frame(self)
+        tree_wrap.pack(fill="both", expand=True, padx=8, pady=4)
+        self.tree = ttk.Treeview(tree_wrap, show="tree headings",
                                  columns=("seq", "dur", "like", "status", "oid", "act", "desc"))
         self.tree.heading("#0", text="封面")
         self.tree.column("#0", width=72, anchor="center")
@@ -534,7 +528,10 @@ class App(tk.Tk):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w")
         self.tree.column("act", anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=8, pady=4)
+        self.tree_scroll = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.tree_scroll.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        self.tree_scroll.pack(side="right", fill="y")
         self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Double-1>", lambda e: self.download_selected())
 
@@ -600,9 +597,7 @@ class App(tk.Tk):
 
     def refresh_covers(self):
         self.photos = []
-        start = self.page * self.page_size
-        for off, item in enumerate(self.tree.get_children()):
-            idx = start + off
+        for idx, item in enumerate(self.tree.get_children()):
             if idx >= len(self.cards):
                 break
             self.tree.item(item, image=self._photo_for(self.cards[idx]))
@@ -632,7 +627,6 @@ class App(tk.Tk):
             return
         # 每次扫描都先清空旧列表，避免自动扫描失败时继续显示上一个账号/上一次的卡片
         self.cards = []
-        self.page = 0
         self.tree.delete(*self.tree.get_children())
         self.scan_btn.configure(state="disabled")
         self.dl_btn.configure(state="disabled")
@@ -689,7 +683,6 @@ class App(tk.Tk):
                     if len(item) <= 2:
                         # 扫描失败时不要继续显示上一次的旧卡片
                         self.cards = []
-                        self.page = 0
                         self.render()
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
@@ -821,7 +814,6 @@ class App(tk.Tk):
             # 保留两种来源：渲染时按当前 checkbox 动态选择
             c["screenshot_cover_path"] = c.get("cover_path") or ""
         if changed:
-            self.page = 0
             self.logline(f"账号已切换: {new_account}，已清空旧列表状态")
         resolved = (snap.get("resolved") or {}).get("rows") or []
         by_idx = {r.get("index"): r for r in resolved if r.get("index") is not None}
@@ -859,29 +851,12 @@ class App(tk.Tk):
     def render(self):
         self.tree.delete(*self.tree.get_children())
         self.photos = []
-        total = max(1, (len(self.cards) + self.page_size - 1) // self.page_size)
-        self.page = max(0, min(self.page, total - 1))
-        self.page_label.configure(text=f"{self.page + 1}/{total}")
-        start = self.page * self.page_size
-        subset = self.cards[start:start + self.page_size]
-        for off, c in enumerate(subset):
-            i = start + off
+        for i, c in enumerate(self.cards):
             photo = self._photo_for(c)
             st = c.get("status", "pending")
             self.tree.insert("", "end", image=photo, values=(
                 i + 1, c.get("duration", ""), c.get("like", ""), st,
                 c.get("object_id") or "", "下载", (c.get("desc") or "")[:110]))
-
-    def prev_page(self):
-        if self.page > 0:
-            self.page -= 1
-            self.render()
-
-    def next_page(self):
-        total = max(1, (len(self.cards) + self.page_size - 1) // self.page_size)
-        if self.page + 1 < total:
-            self.page += 1
-            self.render()
 
     def on_tree_click(self, event):
         if self.tree.identify_region(event.x, event.y) != "cell":
@@ -891,7 +866,7 @@ class App(tk.Tk):
         rid = self.tree.identify_row(event.y)
         if not rid:
             return
-        i = self.page * self.page_size + self.tree.index(rid)
+        i = self.tree.index(rid)
         if 0 <= i < len(self.cards):
             self.tree.selection_set(rid)
             self.download_row(self.cards[i])
@@ -900,7 +875,7 @@ class App(tk.Tk):
         items = self.tree.selection()
         if not items:
             return None
-        i = self.page * self.page_size + self.tree.index(items[0])
+        i = self.tree.index(items[0])
         return self.cards[i] if 0 <= i < len(self.cards) else None
 
     def row_by_key(self, key):
