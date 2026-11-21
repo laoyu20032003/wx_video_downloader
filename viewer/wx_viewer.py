@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """视频号卡片列表 / 封面 / 按卡激活下载（独立于微信主界面）。
 
 流程：
@@ -565,19 +565,24 @@ class App(tk.Tk):
         self.tree = ttk.Treeview(tree_wrap, show="tree headings",
                                  columns=("seq", "dur", "like", "status", "file", "oid", "act", "desc"))
         self.tree.heading("#0", text="封面")
-        self.tree.column("#0", width=72, anchor="center")
-        for c, t, w in (("seq", "序号", 50), ("dur", "时长", 65),
+        self.tree.column("#0", width=94, minwidth=94, stretch=False, anchor="center")
+        for c, t, w in (("seq", "序号", 56), ("dur", "时长", 65),
                         ("like", "点赞", 65), ("status", "状态", 80),
-                        ("file", "文件名", 200), ("oid", "OID", 150),
-                        ("act", "操作", 65), ("desc", "文案", 390)):
+                        ("file", "文件名", 190), ("oid", "OID", 150),
+                        ("act", "操作", 65), ("desc", "文案", 370)):
             self.tree.heading(c, text=t)
-            self.tree.column(c, width=w, anchor="w")
+            self.tree.column(c, width=w, minwidth=w, stretch=(c == "desc"), anchor="w")
         self.tree.column("act", anchor="center")
         self.tree.tag_configure("openrow", foreground="#1a73e8")
         self.tree_scroll = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=self.tree_scroll.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        self.tree_scroll.pack(side="right", fill="y")
+        self.tree_hscroll = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=self.tree_scroll.set,
+                            xscrollcommand=self.tree_hscroll.set)
+        tree_wrap.grid_rowconfigure(0, weight=1)
+        tree_wrap.grid_columnconfigure(0, weight=1)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        self.tree_scroll.grid(row=0, column=1, sticky="ns")
+        self.tree_hscroll.grid(row=1, column=0, sticky="ew")
         self.tree.bind("<Button-1>", self.on_tree_click)
         self.tree.bind("<Double-1>", lambda e: self.activate_selected())
 
