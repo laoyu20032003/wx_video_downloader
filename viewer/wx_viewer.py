@@ -137,10 +137,9 @@ def run_hidden(args, **kwargs):
 
 
 def add_cover_frame(video_path, cover_path):
-    """Prepend one cache-cover frame; returns a new *_cover.mp4 or "".
+    """Prepend one cache-cover frame; replaces the original in place.
 
-    The original file is never modified. This is optional and only called
-    when the user checked “下载后加封面” and a verified cache cover exists.
+    Returns the same path on success or "" on failure. No second file is kept.
     """
     if not video_path or not cover_path or not os.path.exists(video_path) or not os.path.exists(cover_path):
         return ""
@@ -164,9 +163,12 @@ def add_cover_frame(video_path, cover_path):
             fps = 30.0
         frame_t = max(1 / fps, 0.02)
         stem, ext = os.path.splitext(video_path)
-        out = stem + "_cover" + (ext or ".mp4")
+        out = stem + ".cover_tmp" + (ext or ".mp4")
         if os.path.exists(out):
-            os.remove(out)
+            try:
+                os.remove(out)
+            except OSError:
+                return ""
         vf = (
             f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},setsar=1,fps={fps:.6f},"
@@ -184,9 +186,20 @@ def add_cover_frame(video_path, cover_path):
         ], capture_output=True, text=True, encoding="utf-8",
            errors="replace", timeout=900)
         if p.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 1024:
-            return out
+            try:
+                os.replace(out, video_path)
+                return video_path
+            except OSError:
+                try:
+                    os.remove(out)
+                except OSError:
+                    pass
+                return ""
         if os.path.exists(out):
-            os.remove(out)
+            try:
+                os.remove(out)
+            except OSError:
+                pass
         return ""
     except Exception:
         return ""
@@ -603,16 +616,17 @@ class App(tk.Tk):
         tree_wrap = tk.Frame(self)
         tree_wrap.pack(fill="both", expand=True, padx=8, pady=4)
         self.tree = ttk.Treeview(tree_wrap, show="tree headings",
-                                 columns=("seq", "dur", "like", "status", "oid", "act", "desc"))
+                                 columns=("seq", "dur", "like", "status", "file", "oid", "act", "desc"))
         self.tree.heading("#0", text="封面")
         self.tree.column("#0", width=72, anchor="center")
         for c, t, w in (("seq", "序号", 50), ("dur", "时长", 65),
                         ("like", "点赞", 65), ("status", "状态", 80),
-                        ("oid", "OID", 150), ("act", "操作", 65),
-                        ("desc", "文案", 520)):
+                        ("file", "文件名", 200), ("oid", "OID", 150),
+                        ("act", "操作", 65), ("desc", "文案", 390)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w")
         self.tree.column("act", anchor="center")
+        self.tree.tag_configure("openrow", foreground="#1a73e8")
         self.tree_scroll = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=self.tree_scroll.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -944,14 +958,15 @@ class App(tk.Tk):
             photo = self._photo_for(c)
             st = c.get("status", "pending")
             act = "打开" if st == "done" and c.get("file") and os.path.exists(c["file"]) else "下载"
-            self.tree.insert("", "end", image=photo, values=(
+            fname = os.path.basename(c.get("file") or "")
+            self.tree.insert("", "end", image=photo, tags=(("openrow",) if act == "打开" else ()), values=(
                 i + 1, c.get("duration", ""), c.get("like", ""), st,
-                c.get("object_id") or "", act, (c.get("desc") or "")[:110]))
+                fname, c.get("object_id") or "", act, (c.get("desc") or "")[:110]))
 
     def on_tree_click(self, event):
         if self.tree.identify_region(event.x, event.y) != "cell":
             return
-        if self.tree.identify_column(event.x) != "#6":
+        if self.tree.identify_column(event.x) != "#7":
             return
         rid = self.tree.identify_row(event.y)
         if not rid:
