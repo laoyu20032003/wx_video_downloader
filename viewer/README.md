@@ -1,4 +1,4 @@
-# wx-viewer（本项目版本）
+﻿# wx-viewer（本项目版本）
 
 > **DeepSeek Harness** · 文档整理与验证
 
@@ -100,14 +100,6 @@ cache verified key=... d=8 file=f_... url=...
 `d` 是 dHash 距离，越小越像；只有通过验证的才会显示。
 
 如果发现 cache 封面仍然错位，取消「优先使用 CEF cache 封面」，只用截图；截图 fallback 暂时保留。
-
-单行补封面：
-
-```text
-选中一行 → 补封面
-```
-
-它会 hover 1 秒，然后优先取本次新增 cache 封面，没有则截图；OID/URL 补到后会动态刷新该行。
 
 测试截图来源：
 

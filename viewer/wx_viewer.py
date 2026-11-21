@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """视频号卡片列表 / 封面 / 按卡激活下载（独立于微信主界面）。
 
 流程：
@@ -313,57 +313,6 @@ class BaselineWorker(threading.Thread):
             self.q.put(("baseline_error", str(e)))
 
 
-class CoverWorker(threading.Thread):
-    """Explicit “补封面”: hover once, then take a new cache cover or screenshot."""
-
-    def __init__(self, q, row, allow_screenshot, use_cache):
-        super().__init__(daemon=True)
-        self.q = q
-        self.row = row
-        self.key = row.get("key")
-        self.allow_screenshot = allow_screenshot
-        self.use_cache = use_cache
-
-    def run(self):
-        try:
-            baseline = cache_covers.snapshot() if self.use_cache else set()
-            c = scanmod.Collector(OUT_JSON, scroll=True, capture_covers=True)
-            c._init_uia()
-            c._pick_profile()
-            card = c.find_card(self.key)
-            if not card:
-                self.q.put(("error", "补封面：当前 UIA 找不到这张卡", self.key))
-                return
-            c.hover(card, seconds=1.0)
-            shot = c._capture_cover(card) if self.allow_screenshot else ""
-            path = ""
-            url = ""
-            covers = []
-            if self.use_cache:
-                info = cache_covers.collect()
-                covers = info.get("covers") or []
-                if shot:
-                    card["screenshot_cover_path"] = shot
-                    n, _ = cache_covers.attach_verified([card], info)
-                    if n:
-                        path = card.get("cache_cover_path") or ""
-                        url = card.get("cover_url") or ""
-            if not path and shot:
-                path = shot
-            if not path:
-                self.q.put(("error", "补封面：本次没有新增 cache，截图 fallback 也关闭", self.key))
-                return
-            self.q.put(("cover", {
-                "key": self.key,
-                "path": path,
-                "url": url,
-                "cache": bool(covers),
-                "file": covers[0].get("file") if covers else "",
-            }))
-        except Exception as e:
-            self.q.put(("error", "补封面失败: " + str(e), self.key))
-
-
 class DownloadWorker(threading.Thread):
     """Per-row downloader. Pending rows are hovered for 8s, then rebound by oid/index."""
 
@@ -587,13 +536,11 @@ class App(tk.Tk):
         bar.pack(fill="x", padx=8, pady=6)
         self.scan_btn = ttk.Button(bar, text="重新扫描", command=lambda: self.start_scan(True))
         self.dl_btn = ttk.Button(bar, text="下载选中", command=self.download_selected)
-        self.cover_btn = ttk.Button(bar, text="补封面", command=self.cover_selected)
         self.stop_btn = ttk.Button(bar, text="停止", command=self.stop)
         self.status = ttk.Label(bar, text="准备")
         self.account = ttk.Label(bar, text="账号: -")
         self.scan_btn.pack(side="left")
         self.dl_btn.pack(side="left", padx=6)
-        self.cover_btn.pack(side="left")
         self.stop_btn.pack(side="left", padx=6)
         self.account.pack(side="left", padx=12)
         self.status.pack(side="left", padx=8)
@@ -785,7 +732,6 @@ class App(tk.Tk):
                         self.render()
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
-                    self.cover_btn.configure(state="normal")
                     self.render()
                 elif kind == "baseline":
                     self.logline(f"主进程配对基线已建立: {item[1]}")
@@ -814,26 +760,6 @@ class App(tk.Tk):
                             self.logline(
                                 f"cache idx={c.get('idx')} file={c.get('file')} "
                                 f"未通过截图 dHash（不显示）")
-                elif kind == "cover":
-                    d = item[1]
-                    row = self.row_by_key(d.get("key"))
-                    if row:
-                        if d.get("cache"):
-                            row["cache_cover_path"] = d["path"]
-                            row["cache_cover_file"] = d.get("file") or ""
-                            row["cover_source"] = "cef-cache"
-                            if d.get("url"):
-                                row["cover_url"] = d["url"]
-                        else:
-                            row["screenshot_cover_path"] = d["path"]
-                            row["cover_source"] = "screenshot"
-                    self.status.configure(text="封面已更新")
-                    self.logline(
-                        f"封面更新: {d.get('key','')[:24]} source="
-                        f"{'cache' if d.get('cache') else 'screenshot'}")
-                    self.render()
-                    self.dl_btn.configure(state="normal")
-                    self.cover_btn.configure(state="normal")
                 elif kind == "status":
                     self.status.configure(text=item[1])
                     self._progress(item[1])
@@ -876,7 +802,6 @@ class App(tk.Tk):
                     self.render()
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
-                    self.cover_btn.configure(state="normal")
                 elif kind == "failed":
                     self.deiconify()
                     key = item[2] if len(item) > 2 else None
@@ -893,7 +818,6 @@ class App(tk.Tk):
                     self.render()
                     self.scan_btn.configure(state="normal")
                     self.dl_btn.configure(state="normal")
-                    self.cover_btn.configure(state="normal")
         except queue.Empty:
             pass
         self.after(150, self.poll)
@@ -949,8 +873,6 @@ class App(tk.Tk):
         self.render()
         self.scan_btn.configure(state="normal")
         self.dl_btn.configure(state="normal")
-        self.cover_btn.configure(state="normal")
-
     def render(self):
         self.tree.delete(*self.tree.get_children())
         self.photos = []
@@ -994,38 +916,6 @@ class App(tk.Tk):
             if c.get("key") == key:
                 return c
         return None
-
-    def cover_selected(self):
-        row = self.selected()
-        if not row:
-            messagebox.showinfo("提示", "先选中一行")
-            return
-        if self.worker and self.worker.is_alive():
-            messagebox.showinfo("提示", "已有任务在运行")
-            return
-        self.dl_btn.configure(state="disabled")
-        self.cover_btn.configure(state="disabled")
-        self.status.configure(text="补封面：hover 1 秒…")
-        self.worker = CoverWorker(
-            self.q, dict(row),
-            allow_screenshot=self.allow_screenshot.get(),
-            use_cache=self.use_cache_cover.get())
-        self.worker.start()
-
-    def open_file(self, path):
-        try:
-            subprocess.Popen(["explorer.exe", "/select,", os.path.normpath(path)])
-        except Exception as e:
-            self.status.configure(text="打开失败: " + str(e))
-
-    def activate_selected(self):
-        row = self.selected()
-        if not row:
-            return
-        if row.get("status") == "done" and row.get("file") and os.path.exists(row["file"]):
-            self.open_file(row["file"])
-        else:
-            self.download_selected()
 
     def download_selected(self):
         row = self.selected()
