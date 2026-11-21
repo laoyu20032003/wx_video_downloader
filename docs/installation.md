@@ -15,6 +15,14 @@ mitmproxy 12.2.3
 requests 2.32.5
 ```
 
+`requirements.txt` 里固定了：
+
+```text
+requests==2.32.5
+```
+
+这是本机已验证的 requests 版本；如果要测试其他版本，再改这一行。
+
 ## 2. 安装 Python 3.14
 
 从 [python.org](https://www.python.org/downloads/windows/) 下载 Windows 安装包。

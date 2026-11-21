@@ -1,4 +1,4 @@
-requests>=2.31,<3
+requests==2.32.5
 comtypes>=1.4
 psutil>=5.9
 Pillow>=10
