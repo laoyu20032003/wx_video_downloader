@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import ctypes
 from tkinter import ttk, messagebox
 
 from PIL import Image, ImageTk
@@ -936,6 +937,34 @@ class App(tk.Tk):
         self.worker.start()
 
 
+_SINGLE_MUTEX = None
+
+
+def acquire_single_instance():
+    """Windows named mutex; atomic and auto-released when this process exits."""
+    global _SINGLE_MUTEX
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ctypes.set_last_error(0)
+        h = k32.CreateMutexW(None, False, "Local\\wx_viewer_single_instance")
+        if not h:
+            return True
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            k32.CloseHandle(h)
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo("wx-viewer", "已经有一个 wx-viewer 在运行。\n请使用已打开的窗口，不要重复启动。")
+            root.destroy()
+            return False
+        _SINGLE_MUTEX = h
+        return True
+    except Exception:
+        # 取不到 mutex 时不要阻止启动；锁文件失败不应让 viewer 不可用
+        return True
+
+
 if __name__ == "__main__":
     os.makedirs(WORK, exist_ok=True)
+    if not acquire_single_instance():
+        sys.exit(0)
     App().mainloop()
