@@ -74,13 +74,27 @@ oid 15050086854154853712 seed 979861605
 
 ## CEF cache 封面
 
-viewer 默认优先使用 CEF cache 的 `f_*` JPEG，但只接受**本次扫描期间新增的 f_* 文件**，不会拿历史缓存按 index 硬套：
+viewer 使用 CEF cache 的 `f_*` JPEG，但**不按文件顺序/ index 硬套**：
+
+- 每张缓存封面先和当前卡片的屏幕截图做 dHash 比对；
+- 距离 ≤ 48 才认为同一张图，才挂到该行；
+- 不匹配的缓存图不显示，避免“当前标题 + 其他视频号封面”；
+- 匹配成功的 `duration|like|desc -> cover` 写入 `viewer/work/cache_cover_map_v2.json`，后续扫描可复用已验证结果。
+
+开关：
 
 - 「优先使用 CEF cache 封面」默认勾选；
 - 「允许屏幕截图 fallback」默认勾选；
-- 本次扫描没有新增 cache 封面时，直接使用当前屏幕截图；
-- 第一次成功映射的封面会写入 `viewer/work/cache_cover_map.json`，按 `duration|like|desc` 保存；后续扫描会复用，不会因为 baseline 过滤又变成 0；
-- 状态/log 会显示 `cache_dir`、baseline 数量、本次新增唯一封面数、复用上次数量、映射数，以及前几张的 `idx/f_*/resource_code/url`。
+- 取消截图后，只显示通过 dHash 验证的 cache 封面；没有匹配的行走空封面。
+
+状态/log 会显示：
+
+```text
+cache 封面：... 映射 N 张
+cache verified key=... d=8 file=f_... url=...
+```
+
+`d` 是 dHash 距离，越小越像；只有通过验证的才会显示。
 
 如果发现 cache 封面仍然错位，取消「优先使用 CEF cache 封面」，只用截图；截图 fallback 暂时保留。
 

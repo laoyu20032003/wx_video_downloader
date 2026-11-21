@@ -17,12 +17,15 @@ import os
 import shutil
 from datetime import datetime
 
+from PIL import Image
+
 APPDATA = os.environ.get("APPDATA") or os.path.expanduser("~")
 PROFILE_ROOT = os.path.join(APPDATA, "Tencent", "xwechat", "radium", "web", "profiles")
 WORK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work")
 COVER_DIR = os.path.join(WORK, "cache_covers")
 META_CSV = os.path.join(WORK, "cache_meta_entries.csv")
-MAP_PATH = os.path.join(WORK, "cache_cover_map.json")
+# v1 was index-based and unreliable; only v2 contains perceptually verified matches.
+MAP_PATH = os.path.join(WORK, "cache_cover_map_v2.json")
 
 
 def load_map():
@@ -163,6 +166,78 @@ def collect(limit=None, baseline=None):
         "urls": sum(1 for c in covers if c["url"]),
         "duplicates": len(files) - len(covers),
     }
+
+
+def _dhash(path):
+    try:
+        im = Image.open(path).convert("L").resize((17, 16))
+        px = list(im.get_flattened_data()) if hasattr(im, "get_flattened_data") else list(im.getdata())
+        return [px[y * 17 + x] < px[y * 17 + x + 1] for y in range(16) for x in range(16)]
+    except Exception:
+        return None
+
+
+def _hamming(a, b):
+    return sum(x != y for x, y in zip(a, b)) if a and b else 999
+
+
+def attach_verified(cards, info, threshold=48):
+    """Attach cache cover only when its dHash matches the card screenshot.
+
+    Screenshot is the display ground truth. This prevents a historical/other-card
+    cache JPEG from being attached just because its file order is close.
+    """
+    covers = (info or {}).get("covers") or []
+    if not covers:
+        return 0, []
+    cache = []
+    for c in covers:
+        h = _dhash(c["path"])
+        if h:
+            cache.append((h, c))
+    pairs = []
+    for ci, card in enumerate(cards):
+        shot = card.get("screenshot_cover_path") or card.get("cover_path")
+        if not shot or not os.path.exists(shot):
+            continue
+        sh = _dhash(shot)
+        if not sh:
+            continue
+        for h, c in cache:
+            d = _hamming(sh, h)
+            if d <= threshold:
+                pairs.append((d, ci, id(c), c))
+    pairs.sort(key=lambda x: x[0])
+    used_cards, used_covers, picked = set(), set(), []
+    for d, ci, cid, c in pairs:
+        if ci in used_cards or cid in used_covers:
+            continue
+        used_cards.add(ci)
+        used_covers.add(cid)
+        card = cards[ci]
+        card["cache_cover_path"] = c["path"]
+        card["cover_source"] = "cef-cache"
+        card["cache_cover_file"] = c["file"]
+        card["cache_cover_score"] = d
+        if c.get("url"):
+            card["cover_url"] = c["url"]
+            card["cover_resource_code"] = c.get("resource_code")
+            card["cover_encfilekey"] = c.get("encfilekey")
+            card["cover_m"] = c.get("m")
+        picked.append({"key": card.get("key"), "distance": d,
+                       "path": c["path"], "url": c.get("url") or "",
+                       "file": c["file"]})
+    if picked:
+        saved = load_map()
+        for p in picked:
+            if not p.get("key"):
+                continue
+            saved[p["key"]] = {
+                "path": p["path"], "file": p["file"], "url": p["url"],
+                "distance": p["distance"], "verified": True,
+            }
+        save_map(saved)
+    return len(picked), picked
 
 
 def attach(cards, info):

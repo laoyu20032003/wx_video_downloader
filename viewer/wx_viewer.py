@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """视频号卡片列表 / 封面 / 按卡激活下载（独立于微信主界面）。
 
 流程：
@@ -188,11 +188,13 @@ class ScanWorker(threading.Thread):
                 self.q.put(("status", "读取 CEF cache 封面…"))
                 try:
                     saved_n = cache_covers.attach_saved(snap.get("cards") or [])
-                    info = cache_covers.collect(baseline=cache_baseline)
+                    info = cache_covers.collect()
                     info["baseline"] = len(cache_baseline or ())
                     info["saved"] = saved_n
                     snap["cache_cover"] = info
-                    attached = cache_covers.attach(snap.get("cards") or [], info)
+                    attached, picked = cache_covers.attach_verified(
+                        snap.get("cards") or [], info)
+                    info["picked"] = picked
                     self.q.put(("cache_info", cache_covers.summary(info), attached, info))
                 except Exception as e:
                     self.q.put(("cache_info", "cache 封面失败: " + str(e), 0, {}))
@@ -262,17 +264,21 @@ class CoverWorker(threading.Thread):
                 self.q.put(("error", "补封面：当前 UIA 找不到这张卡", self.key))
                 return
             c.hover(card, seconds=1.0)
+            shot = c._capture_cover(card) if self.allow_screenshot else ""
             path = ""
             url = ""
             covers = []
             if self.use_cache:
-                info = cache_covers.collect(baseline=baseline)
+                info = cache_covers.collect()
                 covers = info.get("covers") or []
-                if covers:
-                    path = covers[0]["path"]
-                    url = covers[0].get("url") or ""
-            if not path and self.allow_screenshot:
-                path = c._capture_cover(card)
+                if shot:
+                    card["screenshot_cover_path"] = shot
+                    n, _ = cache_covers.attach_verified([card], info)
+                    if n:
+                        path = card.get("cache_cover_path") or ""
+                        url = card.get("cover_url") or ""
+            if not path and shot:
+                path = shot
             if not path:
                 self.q.put(("error", "补封面：本次没有新增 cache，截图 fallback 也关闭", self.key))
                 return
@@ -703,14 +709,18 @@ class App(tk.Tk):
                     self.cache_status.configure(
                         text=f"cache 封面: 映射 {attached} 张" if info.get("ok") else "cache: 无")
                     self.logline(msg + f"；映射 {attached} 张；复用上次 {info.get('saved',0)} 张；baseline={info.get('baseline','?')}")
-                    for c in (info.get("covers") or [])[:8]:
-                        if c.get("url"):
+                    picked = info.get("picked") or []
+                    if picked:
+                        for p in picked[:8]:
+                            self.logline(
+                                f"cache verified key={str(p.get('key'))[:24]} "
+                                f"d={p.get('distance')} file={p.get('file')} "
+                                f"url={str(p.get('url') or '')[:120]}")
+                    else:
+                        for c in (info.get("covers") or [])[:4]:
                             self.logline(
                                 f"cache idx={c.get('idx')} file={c.get('file')} "
-                                f"code={c.get('resource_code')} url={c.get('url')[:140]}")
-                        else:
-                            self.logline(
-                                f"cache idx={c.get('idx')} file={c.get('file')} url=（无离线元数据）")
+                                f"未通过截图 dHash（不显示）")
                 elif kind == "cover":
                     d = item[1]
                     row = self.row_by_key(d.get("key"))
