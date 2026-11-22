@@ -218,7 +218,13 @@ def collect(limit=None, baseline=None):
 
 def _dhash(path):
     try:
-        im = Image.open(path).convert("L").resize((17, 16))
+        im = Image.open(path).convert("L")
+        w, h = im.size
+        # 卡片截图与 cache 封面常是不同裁切/带黑边；比较中心正方形，
+        # 避免把同一张图判成不同图。
+        s = min(w, h)
+        im = im.crop(((w - s) // 2, (h - s) // 2,
+                      (w + s) // 2, (h + s) // 2)).resize((17, 16))
         px = list(im.get_flattened_data()) if hasattr(im, "get_flattened_data") else list(im.getdata())
         return [px[y * 17 + x] < px[y * 17 + x + 1] for y in range(16) for x in range(16)]
     except Exception:
