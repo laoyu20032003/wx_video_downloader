@@ -255,8 +255,18 @@ class ScanWorker(threading.Thread):
             def on_step(step, snap):
                 self.q.put(("step", step, snap))
             snap = c.run(on_step)
+            if c.total_count and len(c.cards) < c.total_count:
+                self.q.put(("status",
+                    f"只扫到 {len(c.cards)}/{c.total_count}，微信可能被完全遮挡；置前重试…"))
+                try:
+                    c._focus()
+                    snap = c.run(on_step)
+                except Exception as e:
+                    self.q.put(("status", "置前重试失败: " + str(e)))
             # UIA 列表已完整：先让用户看到卡片，再补 cache/oid/URL
             self.q.put(("partial", snap))
+            if c.total_count and len(c.cards) < c.total_count:
+                self.q.put(("incomplete", len(c.cards), c.total_count))
 
             if self.use_cache:
                 self.q.put(("status", "读取 CEF cache 封面…"))
@@ -726,6 +736,13 @@ class App(tk.Tk):
                     self._progress(msg)
                 elif kind == "partial":
                     self.on_scan_partial(item[1])
+                elif kind == "incomplete":
+                    got, total = item[1], item[2]
+                    messagebox.showwarning(
+                        "扫描不全",
+                        f"只扫描到 {got}/{total} 张。\n"
+                        "视频号窗口可能被完全遮挡，静默滚动无法触发分页。\n"
+                        "请把微信窗口露出来，再点「重新扫描」。")
                 elif kind == "done":
                     self._close_progress()
                     self.on_scan_done(item[1])

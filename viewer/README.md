@@ -31,6 +31,7 @@ pythonw viewer\wx_viewer.py
 - 每行有「下载」操作；
 - 单实例：用 Windows named mutex 原子锁定，重复启动会提示“已经有一个 wx-viewer 在运行”并退出；
 - 扫描分两段：UIA 卡片列表先显示（partial），cache 封面/OID/URL 随后补齐；renderer 与主进程扫描并行；
+- 如果 UIA 只扫到首屏、少于账号显示的作品数，viewer 会把微信置前重试一次；仍不全则弹窗提示“窗口可能被完全遮挡”，需要露出微信后重新扫描；
 - 切换视频号账号/作者主页后点「重新扫描」：清空旧列表、强制重扫 renderer/主进程，避免旧账号的 oid/URL 串到新列表；
 - 列表不再分页：全部卡片放在一个可滚动 Treeview 里，几百行由 Tk 滚动条承载；
 - `ready` 行：有 seed 则直接自解密；没有 seed 才 hover 8 秒取明文头后下载；
