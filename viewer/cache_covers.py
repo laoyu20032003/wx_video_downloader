@@ -250,6 +250,7 @@ def attach_verified(cards, info, threshold=48):
         if h:
             cache.append((h, c))
     pairs = []
+    nearest = []
     for ci, card in enumerate(cards):
         shot = card.get("screenshot_cover_path") or card.get("cover_path")
         if not shot or not os.path.exists(shot):
@@ -257,10 +258,19 @@ def attach_verified(cards, info, threshold=48):
         sh = _dhash(shot)
         if not sh:
             continue
+        best = None
         for h, c in cache:
             d = _hamming(sh, h)
+            if best is None or d < best[0]:
+                best = (d, c)
             if d <= threshold:
                 pairs.append((d, ci, id(c), c))
+        if best is not None:
+            nearest.append({
+                "key": card.get("key"), "distance": best[0],
+                "file": best[1]["file"], "url": best[1].get("url") or "",
+                "matched": best[0] <= threshold,
+            })
     pairs.sort(key=lambda x: x[0])
     used_cards, used_covers, picked = set(), set(), []
     for d, ci, cid, c in pairs:
@@ -291,6 +301,8 @@ def attach_verified(cards, info, threshold=48):
                 "distance": p["distance"], "verified": True,
             }
         save_map(saved)
+    if isinstance(info, dict):
+        info["nearest"] = sorted(nearest, key=lambda x: x["distance"])
     return len(picked), picked
 
 

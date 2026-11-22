@@ -763,10 +763,11 @@ class App(tk.Tk):
                                 f"d={p.get('distance')} file={p.get('file')} "
                                 f"url={str(p.get('url') or '')[:120]}")
                     else:
-                        for c in (info.get("covers") or [])[:4]:
+                        for n in (info.get("nearest") or [])[:5]:
                             self.logline(
-                                f"cache idx={c.get('idx')} file={c.get('file')} "
-                                f"未通过截图 dHash（不显示）")
+                                f"cache nearest key={str(n.get('key'))[:20]} "
+                                f"d={n.get('distance')} file={n.get('file')} "
+                                f"{'已匹配' if n.get('matched') else '未达阈值'}")
                 elif kind == "status":
                     self.status.configure(text=item[1])
                     self._progress(item[1])
