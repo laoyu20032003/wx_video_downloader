@@ -249,7 +249,8 @@ class ScanWorker(threading.Thread):
         try:
             c = scanmod.Collector(
                 OUT_JSON, wait=0.75, max_pages=50, scroll=True,
-                restore=True, cap=False, capture_covers=self.capture_screenshots)
+                restore=True, cap=False, capture_covers=self.capture_screenshots,
+                allow_raise=self.force)
             self.collector = c
             cache_baseline = cache_covers.snapshot() if self.use_cache else None
             def on_step(step, snap):
@@ -259,7 +260,9 @@ class ScanWorker(threading.Thread):
                 self.q.put(("status",
                     f"只扫到 {len(c.cards)}/{c.total_count}，微信可能被完全遮挡；置前重试…"))
                 try:
-                    c._focus()
+                    # 允许这一次使用 ScrollPattern.SetScrollPercent 回到顶部；
+                    # 它会 raise 微信，但仅发生在首屏不全的重试。
+                    c.allow_raise = True
                     snap = c.run(on_step)
                 except Exception as e:
                     self.q.put(("status", "置前重试失败: " + str(e)))

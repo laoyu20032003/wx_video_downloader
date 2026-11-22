@@ -69,7 +69,7 @@ def parse_like(s):
 
 
 class Collector:
-    def __init__(self, out_path, wait=0.8, max_pages=12, scroll=True, restore=True, cap=False, capture_covers=True):
+    def __init__(self, out_path, wait=0.8, max_pages=12, scroll=True, restore=True, cap=False, capture_covers=True, allow_raise=False):
         self.out_path = out_path
         self.wait = wait
         self.max_pages = max_pages
@@ -77,6 +77,7 @@ class Collector:
         self.restore = restore
         self.cap = cap
         self.capture_covers = capture_covers
+        self.allow_raise = allow_raise
         self.cover_dir = os.path.join(os.path.dirname(os.path.abspath(out_path)), "covers_uia")
         self.stop_flag = False
         self.cards = {}
@@ -690,8 +691,17 @@ class Collector:
         return False
 
     def _reset_top(self, steps=30):
-        # 扫描阶段绝不 focus/raise；ScrollPattern 的 SetScrollPercent 会 raise，
-        # 所以这里只用静默 ScrollIntoView。
+        # 扫描阶段默认不 focus/raise；只有“重扫/首屏不全”时允许
+        # ScrollPattern.SetScrollPercent（本机会 raise）来强制回到顶部。
+        if self.allow_raise:
+            try:
+                sp = self._content_scroll()
+                if sp is not None:
+                    sp.SetScrollPercent(-1, 0)
+                    time.sleep(0.45)
+                    return
+            except Exception:
+                pass
         if self._scroll_top_silent():
             return
         self.last_find_reason = "滚动到顶部失败（静默方式不可用）"
