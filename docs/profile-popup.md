@@ -140,8 +140,9 @@ UTF-16/ASCII 响应对象中可看到单条 feed 的完整结构：
    - 调用后卡片矩形、offscreen 状态和数量均不变，连续两轮增长为 0；
    - 说明在非 hover 层没有 UIA/DOM focus 时，该调用更像被浏览器/无障碍层接受但没有实际驱动隐藏滚动容器。
 
-2. **先 `SetFocus`，再 `ScrollIntoView`：可以在后台程序化分页，无需鼠标、键盘或点击。**
-   - `SetFocus` 没有把微信窗口抢到前台，截图时前台仍是豆包窗口；
+2. **先 `SetFocus`，再 `ScrollIntoView`：可以程序化分页，无需鼠标、键盘或点击。**
+   - 早期观察：`SetFocus` 没有把微信窗口抢到前台，截图时前台仍是豆包窗口；
+   - **2026-11-22 复验：仍可能把微信 raise 到前台**，不能保证真正的后台；因此只作为备用方案；
    - 调用后卡片数从 15 增至 30；
    - 连续分页过程：30 → 45 → 60 → 75 → 90 → 105 → 111；
    - 最后一批仅增长 6，之后两次继续调用均保持 111，判定当前作者作品页到达末尾；
@@ -174,11 +175,29 @@ UTF-16/ASCII 响应对象中可看到单条 feed 的完整结构：
 
 边界：`SetFocus` 是 UIA 程序化调用，不是物理交互；但如果要求严格“零 focus 变化”，仅靠无 focus 的 `ScrollIntoView` 当前不能滚动隐藏层。
 
+### 备用方案：SetFocus + ScrollIntoView
+
+仅作为 `content.ScrollPattern` 不可用时的后备记录，不默认接入 viewer：
+
+1. 在播放窗打开作者 profile 弹层；
+2. 找到保留的 `author-profile-area` / `scroll-ctn` 下的 `click-box`；
+3. 对目标卡片调用 UIA `SetFocus()`；
+4. 再调用 `ScrollItemPattern.ScrollIntoView()`；
+5. 等待 300–500ms，重新统计 `click-box` 数量/位置；
+6. 重复直到卡片数不再增长，或目标卡片出现。
+
+边界：
+
+- `ScrollIntoView` 单独调用可能返回成功但不真正滚动；
+- `SetFocus` 仍可能 raise 微信窗口到前台；
+- 只能拿到 UIA 卡片，仍无 oid/20302 URL；
+- 因此当前只记录方法，不替换 `content.ScrollPattern`。
+
 ## 结论
 
 1. 进入 hover 后，原 profile 弹层不是确定性销毁；RawViewWalker 父链证明 `author-profile-area`/`scroll-ctn` 和卡片会保留。
 2. UIA 可稳定读取首批卡片的位置、时长、点赞和描述，但不直接给出 oid/URL。
-3. 无 focus 的 `ScrollIntoView` 对隐藏层不产生实际分页；`SetFocus + ScrollIntoView` 可以在后台无鼠标键盘地滚动隐藏层并拿全当前样本 111 条。
+3. 无 focus 的 `ScrollIntoView` 对隐藏层不产生实际分页；`SetFocus + ScrollIntoView` 能程序化分页（15 → 111），但仍可能 raise 前台，只作备用记录。
 4. 进入 hover 后，已驻留/已上报的 feed 对象可回出完整 20302 URL、decodeKey 和 20350 封面。
 5. 本地 blockfile cache 可免费、离线地恢复 profile 卡片封面；20304 的顺序可映射 UIA 卡片序号。
-6. 后续可把 `SetFocus + ScrollItemPattern.ScrollIntoView` 固化为自动分页采集器，并继续定位前端 store/响应对象以闭合 `idx -> oid -> URL`。
+6. `SetFocus + ScrollItemPattern.ScrollIntoView` 只作为 `content.ScrollPattern` 不可用时的备用方法记录；当前不接入自动采集。
