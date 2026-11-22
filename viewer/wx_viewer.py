@@ -258,6 +258,8 @@ class ScanWorker(threading.Thread):
             if self.use_cache:
                 self.q.put(("status", "读取 CEF cache 封面…"))
                 try:
+                    if cache_covers.ensure_meta():
+                        self.q.put(("status", "已自动生成 cache 封面 URL 元数据（首次）"))
                     saved_n = cache_covers.attach_saved(snap.get("cards") or [])
                     info = cache_covers.collect()
                     info["baseline"] = len(cache_baseline or ())

@@ -133,6 +133,14 @@ python viewer\cache_meta_parse.py
 
 `--live` 只快照 `index`/`data_*`，不会复制大量 `f_*`；payload 仍从正在运行的 Cache_Data 读取。
 
+viewer 扫描时如果发现 `viewer/work/cache_meta_entries.csv` 不存在，会自动执行一次 `--live`（每个 viewer 进程最多一次），之后不会反复执行。
+
+注意：这是一次 cache 快照，不是永久数据库。新增视频/封面后 URL 元数据可能过期，建议定期手动重跑：
+
+```powershell
+python viewer\cache_meta_parse.py --live
+```
+
 输出：
 
 ```text

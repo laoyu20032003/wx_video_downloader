@@ -15,6 +15,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 from datetime import datetime
 
 from PIL import Image
@@ -24,6 +26,7 @@ PROFILE_ROOT = os.path.join(APPDATA, "Tencent", "xwechat", "radium", "web", "pro
 WORK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work")
 COVER_DIR = os.path.join(WORK, "cache_covers")
 META_CSV = os.path.join(WORK, "cache_meta_entries.csv")
+META_JSON = os.path.join(WORK, "cache_meta_entries.json")
 # v1 was index-based and unreliable; only v2 contains perceptually verified matches.
 MAP_PATH = os.path.join(WORK, "cache_cover_map_v2.json")
 
@@ -70,6 +73,51 @@ def _jpeg_sha(path):
             return hashlib.sha256(f.read()).hexdigest()
     except OSError:
         return None
+
+
+_META_ATTEMPTED = False
+
+
+def ensure_meta():
+    """Run the live cache snapshot once if cover URL metadata is absent.
+
+    Returns True only when this call created cache_meta_entries.csv.
+    The CSV is a snapshot, not a permanent one-time database; refresh it
+    manually with cache_meta_parse.py --live when new covers are added.
+    """
+    global _META_ATTEMPTED
+    try:
+        if os.path.exists(META_CSV) and os.path.getsize(META_CSV) > 0:
+            return False
+    except OSError:
+        pass
+    if _META_ATTEMPTED:
+        return False
+    _META_ATTEMPTED = True
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache_meta_parse.py")
+    if not os.path.exists(script):
+        return False
+    py = sys.executable
+    if py.lower().endswith("pythonw.exe"):
+        py = py[:-11] + "python.exe"
+    try:
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 0
+            kwargs["startupinfo"] = si
+        subprocess.run(
+            [py, script, "--live"], cwd=os.path.dirname(script),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=180, **kwargs)
+    except Exception:
+        return False
+    try:
+        return os.path.exists(META_CSV) and os.path.getsize(META_CSV) > 0
+    except OSError:
+        return False
 
 
 def load_url_map():
