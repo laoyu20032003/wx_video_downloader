@@ -158,7 +158,7 @@ viewer/work/cache_meta_entries.json
 
 ## 限制
 
-- 扫描会先滚到顶部并逐屏读取；**微信 4.2.0.53 的 CEF 网格可能隔离本地 Python 的合成滚轮/键盘**，但扫描分页和 `find_card` 都会用祖先 `class=content` 的 UIA `ScrollPattern`；只有目标不在当前 UIA 序列/ScrollPattern 不可用时才需要手动滚动；
+- 扫描会先滚到顶部并逐屏读取；**微信 4.2.0.53 的 CEF 网格可能隔离本地 Python 的合成滚轮/键盘**；扫描分页和 `find_card` 优先用祖先 `class=content` 的 UIA `ScrollPattern`，取不到时静默 `ScrollItemPattern.ScrollIntoView`（不 SetFocus），最后才回退鼠标；
 - 找不到卡片时：确认微信停留在该作者主页，先手动滚到目标卡附近再点下载；日志会列出当前 UIA 的账号、卡片数、同时长/同文案候选；
 - renderer/主进程记录只覆盖当前会话/已加载卡片；未命中的卡片是 pending；
 - hover 8 秒是经验值；停留更久通常更容易等到 URL/report seed/明文头，但不是硬保证，太长也可能遇到缓存淘汰或限流；有 seed 的 row 不走 hover；
@@ -166,7 +166,7 @@ viewer/work/cache_meta_entries.json
 - 同一时间只允许一个下载任务（hover/滚轮/明文头都是全局状态）；
 - **hover 暂时不可去掉**：non-hover 的应用层路线已实测关闭；详见 [docs/non-hover.md](../docs/non-hover.md)；
 - 不能靠后台/多开播放窗口稳定取明文头；详见 [docs/player-flow-architecture.md](../docs/player-flow-architecture.md)；
-- 播放窗作者弹层、隐藏层分页和 20304 批次见 [docs/profile-popup.md](../docs/profile-popup.md)；其中 `SetFocus + ScrollIntoView` 只作备用，复验仍可能 raise 前台；
+- 播放窗作者弹层、部分遮挡下的静默分页（不 focus、不 raise）和 20304 批次见 [docs/profile-popup.md](../docs/profile-popup.md)；完全遮挡仍会触发 Chromium 原生遮挡检测，`SetFocus` 只作备用且可能 raise 前台；
 - 窗口缩放后按 `uia_key` 重新定位，不依赖旧 rect；
 - 图片/图文/直播回放不是普通视频。
 

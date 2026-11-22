@@ -659,6 +659,21 @@ class Collector:
         top, boxes, wr = self._grid_boxes()
         return self._scroll_pattern(top, boxes, wr)
 
+    def _scroll_item(self, down=True):
+        """Silent fallback: ScrollIntoView the first/last card, no SetFocus."""
+        try:
+            _, boxes, _ = self._grid_boxes()
+            if not boxes.Length:
+                return False
+            idx = boxes.Length - 1 if down else 0
+            el = boxes.GetElement(idx)
+            pat = el.GetCurrentPattern(U.UIA_ScrollItemPatternId)
+            pat.QueryInterface(U.IUIAutomationScrollItemPattern).ScrollIntoView()
+            time.sleep(0.35)
+            return True
+        except Exception:
+            return False
+
     def _reset_top(self, steps=30):
         try:
             sp = self._content_scroll()
@@ -666,6 +681,18 @@ class Collector:
                 sp.SetScrollPercent(-1, 0)
                 time.sleep(0.45)
                 return
+        except Exception:
+            pass
+        # 静默优先：不抢焦点，滚动到最后/第一张卡片
+        for _ in range(3):
+            if not self._scroll_item(False):
+                break
+        try:
+            _, boxes, _ = self._grid_boxes()
+            if boxes.Length:
+                first = self._card_from_box(boxes.GetElement(0))
+                if first and self._visible(first["rect"]):
+                    return
         except Exception:
             pass
         self._focus()
@@ -684,6 +711,9 @@ class Collector:
                 return
         except Exception:
             pass
+        # 没有 content ScrollPattern 时，静默 ScrollIntoView 优先于鼠标
+        if self._scroll_item(down):
+            return
         delta = -900 if down else 900
         USER32.mouse_event(0x0800, 0, 0, delta, 0)
 
