@@ -951,6 +951,28 @@ class App(tk.Tk):
                 return c
         return None
 
+    def open_file(self, path):
+        try:
+            path = os.path.normpath(path)
+            if not os.path.exists(path):
+                self.status.configure(text="打开失败：文件不存在 " + path)
+                return
+            # /select, 必须和路径在同一个 argv：
+            # explorer.exe /select,"C:\..."
+            subprocess.Popen(["explorer.exe", "/select," + path])
+            self.status.configure(text="已在资源管理器中定位: " + os.path.basename(path))
+        except Exception as e:
+            self.status.configure(text="打开失败: " + str(e))
+
+    def activate_selected(self):
+        row = self.selected()
+        if not row:
+            return
+        if row.get("status") == "done" and row.get("file") and os.path.exists(row["file"]):
+            self.open_file(row["file"])
+        else:
+            self.download_selected()
+
     def download_selected(self):
         row = self.selected()
         if not row:
