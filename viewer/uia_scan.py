@@ -674,16 +674,16 @@ class Collector:
         except Exception:
             return False
 
-    def _reset_top(self, steps=30):
+    def _scroll_top_silent(self):
+        """Move the grid to the first card without focus/raise/mouse."""
         try:
             sp = self._content_scroll()
             if sp is not None:
                 sp.SetScrollPercent(-1, 0)
-                time.sleep(0.45)
-                return
+                time.sleep(0.4)
+                return True
         except Exception:
             pass
-        # 静默优先：不抢焦点，滚动到最后/第一张卡片
         for _ in range(3):
             if not self._scroll_item(False):
                 break
@@ -692,14 +692,16 @@ class Collector:
             if boxes.Length:
                 first = self._card_from_box(boxes.GetElement(0))
                 if first and self._visible(first["rect"]):
-                    return
+                    return True
         except Exception:
             pass
-        self._focus()
-        for _ in range(steps):
-            self._wheel(False)
-            time.sleep(0.03)
-        time.sleep(0.3)
+        return False
+
+    def _reset_top(self, steps=30):
+        # 扫描阶段绝不 focus/raise；只走 ScrollPattern 或静默 ScrollIntoView
+        if self._scroll_top_silent():
+            return
+        self.last_find_reason = "滚动到顶部失败（静默方式不可用）"
 
     def _wheel(self, down=True):
         try:
@@ -807,12 +809,9 @@ class Collector:
                 self._wheel(True)
                 time.sleep(self.wait)
 
-        # 回顶部（恢复用户位置）
+        # 回顶部（恢复用户位置）；扫描阶段不 focus/raise
         if self.scroll and self.restore and pages > 1:
-            self._focus()
-            for _ in range(pages - 1):
-                self._wheel(False)
-                time.sleep(0.08)
+            self._scroll_top_silent()
 
         snap = self.snapshot()
         snap["elapsed"] = round(time.time() - start, 1)

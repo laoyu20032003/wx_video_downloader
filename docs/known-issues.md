@@ -813,8 +813,9 @@ wx-dl.ps1 仍走“扫描内存明文头 + 拼接”路线
 对本项目的含义：
 
 - `wx-viewer` 的扫描分页和 `find_card` 现在都优先用 `content` 祖先的 UIA `ScrollPattern`；
-- 取不到 pattern 时，viewer 先尝试无 focus 的 `ScrollItemPattern.ScrollIntoView`（不 SetFocus、不 raise）；再不行才回退鼠标；
+- **扫描阶段不调用 `SetForegroundWindow`/`SetFocus`**；取不到 pattern 时先尝试无 focus 的 `ScrollItemPattern.ScrollIntoView`（不 SetFocus、不 raise），再回退鼠标；静默失败时保留当前批次，不再抢前台；
 - 部分遮挡/未聚焦的 profile 页面可以静默分页；完全遮挡仍会失败；
+- 下载阶段的 `find_card`/hover 仍可能需要 focus，但不会在翻页扫描时主动 raise；
 - 手动滚动微信后，再点「重新扫描」可以并入下一批；
 - 不要用 `wx-viewer` 做“自动翻完作者主页”的承诺；
 - 作者主页全量批量仍应使用 `wx-gui` 的播放器连播。
