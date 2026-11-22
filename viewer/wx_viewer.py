@@ -578,8 +578,8 @@ class App(tk.Tk):
         self.tree.column("#0", width=94, minwidth=94, stretch=False, anchor="center")
         for c, t, w in (("seq", "序号", 56), ("dur", "时长", 65),
                         ("like", "点赞", 65), ("status", "状态", 80),
-                        ("file", "文件名", 190), ("oid", "OID", 150),
-                        ("act", "操作", 65), ("desc", "文案", 370)):
+                        ("file", "文件名", 280), ("oid", "OID", 150),
+                        ("act", "操作", 65), ("desc", "文案", 290)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, minwidth=w, stretch=(c == "desc"), anchor="w")
         self.tree.column("act", anchor="center")
@@ -921,7 +921,8 @@ class App(tk.Tk):
     def on_tree_click(self, event):
         if self.tree.identify_region(event.x, event.y) != "cell":
             return
-        if self.tree.identify_column(event.x) != "#7":
+        col = self.tree.identify_column(event.x)
+        if col not in ("#5", "#7"):
             return
         rid = self.tree.identify_row(event.y)
         if not rid:
@@ -932,7 +933,7 @@ class App(tk.Tk):
             row = self.cards[i]
             if row.get("status") == "done" and row.get("file") and os.path.exists(row["file"]):
                 self.open_file(row["file"])
-            else:
+            elif col == "#7":
                 self.download_row(row)
 
     def selected(self):
