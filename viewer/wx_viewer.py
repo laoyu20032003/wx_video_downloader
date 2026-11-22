@@ -18,6 +18,7 @@ import threading
 import time
 import tkinter as tk
 import ctypes
+from concurrent.futures import ThreadPoolExecutor
 from tkinter import ttk, messagebox
 
 from PIL import Image, ImageTk
@@ -254,6 +255,8 @@ class ScanWorker(threading.Thread):
             def on_step(step, snap):
                 self.q.put(("step", step, snap))
             snap = c.run(on_step)
+            # UIA 列表已完整：先让用户看到卡片，再补 cache/oid/URL
+            self.q.put(("partial", snap))
 
             if self.use_cache:
                 self.q.put(("status", "读取 CEF cache 封面…"))
@@ -272,25 +275,30 @@ class ScanWorker(threading.Thread):
                 except Exception as e:
                     self.q.put(("cache_info", "cache 封面失败: " + str(e), 0, {}))
 
-            # 跨层绑定：renderer 记录（oid/index/时长/点赞） + 主进程完整 URL
-            self.q.put(("status", "扫描 renderer 模型…"))
+            # 跨层绑定：renderer 记录 + 主进程完整 URL，可并行
+            self.q.put(("status", "并行扫描 renderer / 主进程…"))
             try:
                 mem_path = os.path.join(WORK, "mem_model2.json")
-                if self.force or not fresh(mem_path, 600):
-                    run_renderer_scan()
-                else:
-                    # 即使卡片缓存新鲜，也补一次 seed 表（可能已有新 report）
-                    if not fresh(SEED_JSON, 300):
-                        ensure_seeds()
-                self.q.put(("status", "扫描主进程完整 URL…"))
                 pairs_path = os.path.join(WORK, "main_pairs.json")
-                if not self.force and fresh(pairs_path, 600):
-                    with open(pairs_path, encoding="utf-8") as f:
-                        rows = json.load(f).get("rows") or []
-                else:
+
+                def do_renderer():
+                    if self.force or not fresh(mem_path, 600):
+                        run_renderer_scan()
+                    elif not fresh(SEED_JSON, 300):
+                        ensure_seeds()
+
+                def do_pairs():
+                    if not self.force and fresh(pairs_path, 600):
+                        return
                     pid, rows = main_pairs.scan()
                     with open(pairs_path, "w", encoding="utf-8") as f:
                         json.dump({"pid": pid, "rows": rows}, f, ensure_ascii=False)
+
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    f_render = ex.submit(do_renderer)
+                    f_pairs = ex.submit(do_pairs)
+                    f_render.result()
+                    f_pairs.result()
                 self.q.put(("status", "按 oid/序号/时长/点赞绑定…"))
                 snap["resolved"] = run_resolve()
             except Exception as e:
@@ -716,6 +724,8 @@ class App(tk.Tk):
                     msg = f"第 {step['page']} 页 · 已发现 {step['unique']} · 新增 {step['new']}"
                     self.status.configure(text=msg)
                     self._progress(msg)
+                elif kind == "partial":
+                    self.on_scan_partial(item[1])
                 elif kind == "done":
                     self._close_progress()
                     self.on_scan_done(item[1])
@@ -837,6 +847,21 @@ class App(tk.Tk):
         except Exception:
             pass
         self.progress = None
+
+    def on_scan_partial(self, snap):
+        """UIA list is ready; show it before cache/renderer/main scan finishes."""
+        self._close_progress()
+        self.deiconify()
+        account = snap.get("account") or self.current_account or "-"
+        self.current_account = account
+        self.account.configure(text="账号: " + account)
+        self.cards = snap.get("cards") or []
+        for c in self.cards:
+            c["screenshot_cover_path"] = c.get("cover_path") or ""
+        self.status.configure(
+            text=f"基础列表已出 · {len(self.cards)} 张 · 正在补封面/OID/URL…")
+        self.logline(f"partial: {len(self.cards)} 张，继续补封面/OID/URL")
+        self.render()
 
     def on_scan_done(self, snap):
         self._close_progress()
