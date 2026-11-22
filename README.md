@@ -295,6 +295,7 @@ pythonw viewer\wx_viewer.py
 - [docs/association-research.md](docs/association-research.md)（豆包调研原始记录，含失败方向）
 - [docs/non-hover.md](docs/non-hover.md)（去掉 hover 的探索与关闭原因）
 - [docs/player-flow-architecture.md](docs/player-flow-architecture.md)（播放窗口/预加载架构）
+- [docs/profile-popup.md](docs/profile-popup.md)（播放窗作者作品弹层、隐藏层分页与 cache 批次）
 
 Hover 行为排查：运行 `pwsh -File tools\hover-diag.ps1`，报告写到 `work\hover-diag.md`；说明见 [docs/hover-diagnostics.md](docs/hover-diagnostics.md)。
 
