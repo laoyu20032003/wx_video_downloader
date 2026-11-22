@@ -707,9 +707,19 @@ class Collector:
         self.last_find_reason = "滚动到顶部失败（静默方式不可用）"
 
     def _wheel(self, down=True):
-        # 静默优先：ScrollItemPattern.ScrollIntoView 不抢前台。
-        # 注意：content.ScrollPattern 的 Scroll()/SetScrollPercent() 在本机
-        # 会把微信 raise 到前台，所以扫描路径不再调用它。
+        # 允许 raise 的重扫/补救路径：ScrollPattern 才能真正翻页。
+        # 正常扫描仍走静默 ScrollIntoView。
+        if self.allow_raise:
+            try:
+                sp = self._content_scroll()
+                if sp is not None:
+                    sp.Scroll(
+                        U.ScrollAmount_NoAmount,
+                        U.ScrollAmount_LargeIncrement if down else U.ScrollAmount_LargeDecrement)
+                    time.sleep(0.35)
+                    return
+            except Exception:
+                pass
         if self._scroll_item(down):
             return
         delta = -900 if down else 900
