@@ -124,9 +124,14 @@ OID 列会在 hover/重新绑定后动态回填，不需要重新扫描。
 离线恢复 cover URL：
 
 ```powershell
-# 先关闭微信，释放 Cache_Data/index
+# 微信运行中也可以：共享读快照 index/data_*，再解析
+python viewer\cache_meta_parse.py --live
+
+# 或者先关闭微信，直接解析
 python viewer\cache_meta_parse.py
 ```
+
+`--live` 只快照 `index`/`data_*`，不会复制大量 `f_*`；payload 仍从正在运行的 Cache_Data 读取。
 
 输出：
 

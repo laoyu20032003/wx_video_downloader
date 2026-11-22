@@ -13,7 +13,10 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.wintypes as wt
 import csv
+import datetime
 import json
 import os
 import struct
@@ -142,9 +145,61 @@ def detect_magic(head: bytes) -> str:
     return "unknown"
 
 
+def _shared_read_file(path: str) -> bytes:
+    """Read a live Chromium cache file without requiring WeChat to close."""
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    GENERIC_READ = 0x80000000
+    FILE_SHARE_ALL = 0x7
+    OPEN_EXISTING = 3
+    FILE_ATTRIBUTE_NORMAL = 0x80
+    INVALID_HANDLE = wt.HANDLE(-1).value
+    h = k32.CreateFileW(str(path), GENERIC_READ, FILE_SHARE_ALL, None,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, None)
+    if h == INVALID_HANDLE or not h:
+        raise OSError(f"CreateFileW failed: {path}, err={ctypes.get_last_error()}")
+    try:
+        size = ctypes.c_int64()
+        if not k32.GetFileSizeEx(h, ctypes.byref(size)):
+            raise OSError("GetFileSizeEx failed")
+        buf = (ctypes.c_ubyte * min(max(size.value, 1), 1024 * 1024))()
+        got = ctypes.c_ulong()
+        out = bytearray()
+        while len(out) < size.value:
+            want = min(len(buf), size.value - len(out))
+            if not k32.ReadFile(h, buf, want, ctypes.byref(got), None):
+                raise OSError("ReadFile failed")
+            if got.value == 0:
+                break
+            out.extend(buf[:got.value])
+        return bytes(out)
+    finally:
+        k32.CloseHandle(h)
+
+
+def snapshot_cache(cache_dir: str, dst_root: str) -> str:
+    """Copy only index/data_* to a timestamped snapshot while WeChat runs."""
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    dst = os.path.join(dst_root, ts)
+    os.makedirs(dst, exist_ok=False)
+    names = ["index"] + [f"data_{i}" for i in range(4)]
+    for name in names:
+        src = os.path.join(cache_dir, name)
+        if not os.path.exists(src):
+            continue
+        try:
+            data = _shared_read_file(src)
+        except OSError:
+            continue
+        with open(os.path.join(dst, name), "wb") as f:
+            f.write(data)
+    return dst
+
+
 class BlockfileCache:
-    def __init__(self, cache_dir: str):
+    def __init__(self, cache_dir: str, source_dir: str | None = None):
         self.cache_dir = os.path.abspath(cache_dir)
+        # snapshot only contains index/data_*; payload f_* are read from the live cache
+        self.source_dir = os.path.abspath(source_dir or cache_dir)
         self.index_bytes = self._read_file("index")
         self.index_header, self.lru = self._parse_index_header()
         table_len = self.index_header["table_len"] or 65536
@@ -236,7 +291,7 @@ class BlockfileCache:
         if not info["initialized"]:
             raise ValueError("读取了未初始化地址")
         if info["type"] == "separate_file":
-            path = os.path.join(self.cache_dir, f"f_{info['file_num']:06x}")
+            path = os.path.join(self.source_dir, f"f_{info['file_num']:06x}")
             with open(path, "rb") as f:
                 return f.read() if size is None else f.read(size)
 
@@ -365,7 +420,7 @@ class BlockfileCache:
                     addr_info = item["addr_info"]
                     if addr_info["type"] == "separate_file":
                         item["local_path"] = os.path.join(
-                            self.cache_dir,
+                            self.source_dir,
                             f"f_{addr_info['file_num']:06x}",
                         )
             streams.append(item)
@@ -509,10 +564,19 @@ def main() -> int:
     ap.add_argument("--summary-json", default=os.path.join(WORK, "cache_meta_summary.json"))
     ap.add_argument("--csv", default=os.path.join(WORK, "cache_meta_entries.csv"))
     ap.add_argument("--errors-json", default=os.path.join(WORK, "cache_meta_errors.json"))
+    ap.add_argument("--live", action="store_true",
+                    help="snapshot index/data_* while WeChat is running, then parse")
+    ap.add_argument("--snapshot-root", default=os.path.join(WORK, "cache_live_snapshot"))
     args = ap.parse_args()
 
-    cache_dir = os.path.join(args.profile_dir, "Cache", "Cache_Data")
-    cache = BlockfileCache(cache_dir)
+    live_cache = os.path.join(args.profile_dir, "Cache", "Cache_Data")
+    source_dir = live_cache
+    cache_dir = live_cache
+    if args.live:
+        cache_dir = snapshot_cache(live_cache, args.snapshot_root)
+        source_dir = live_cache
+        print("live snapshot:", cache_dir)
+    cache = BlockfileCache(cache_dir, source_dir=source_dir)
     entries, errors = cache.parse_all()
     summary = build_summary(cache, entries, errors)
 
