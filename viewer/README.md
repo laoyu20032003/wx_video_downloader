@@ -160,7 +160,7 @@ viewer/work/cache_meta_entries.json
 
 ## 限制
 
-- 扫描会先滚到顶部并逐屏读取；**正常扫描不调用 `SetForegroundWindow`/`SetFocus`**；分页使用静默 `ScrollItemPattern.ScrollIntoView`；只有手动「重新扫描」或首屏数量不足时，才允许用 `ScrollPattern.SetScrollPercent` 强制回顶（该调用会 raise 微信）；
+- 扫描会先滚到顶部并逐屏读取；**正常扫描不调用 `SetForegroundWindow`/`SetFocus`**；分页使用静默 `ScrollItemPattern.ScrollIntoView`；手动「重新扫描」或首屏数量不足时，会允许 `ScrollPattern.SetScrollPercent`/`Scroll` 回顶并翻页（会 raise 微信一次），以保证能补全；
 - 找不到卡片时：确认微信停留在该作者主页，先手动滚到目标卡附近再点下载；日志会列出当前 UIA 的账号、卡片数、同时长/同文案候选；
 - renderer/主进程记录只覆盖当前会话/已加载卡片；未命中的卡片是 pending；
 - hover 8 秒是经验值；停留更久通常更容易等到 URL/report seed/明文头，但不是硬保证，太长也可能遇到缓存淘汰或限流；有 seed 的 row 不走 hover；

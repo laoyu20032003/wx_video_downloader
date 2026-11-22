@@ -813,7 +813,7 @@ wx-dl.ps1 仍走“扫描内存明文头 + 拼接”路线
 对本项目的含义：
 
 - `wx-viewer` 的**正常扫描分页**使用无 focus 的 `ScrollItemPattern.ScrollIntoView`；
-- `content.ScrollPattern` 的 `Scroll()` / `SetScrollPercent()` 在本机实测会把微信 raise 到前台；正常扫描不用它，只有手动「重新扫描」或首屏数量不足时，才用 `SetScrollPercent` 强制回顶；
+- `content.ScrollPattern` 的 `Scroll()` / `SetScrollPercent()` 在本机实测会把微信 raise 到前台；正常扫描不用它，只有手动「重新扫描」或首屏数量不足时，才用 `ScrollPattern` 回顶并翻页，以确保补全；
 - `find_card` 的精确滚动仍保留 `ScrollPattern`；
 - 部分遮挡/未聚焦的 profile 页面可以静默分页；完全遮挡仍会失败；
 - 下载阶段的 `find_card`/hover 仍可能需要 focus，但不会在翻页扫描时主动 raise；
