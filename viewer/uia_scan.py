@@ -675,45 +675,31 @@ class Collector:
             return False
 
     def _scroll_top_silent(self):
-        """Move the grid to the first card without focus/raise/mouse."""
-        try:
-            sp = self._content_scroll()
-            if sp is not None:
-                sp.SetScrollPercent(-1, 0)
-                time.sleep(0.4)
-                return True
-        except Exception:
-            pass
-        for _ in range(3):
+        """Move the grid to the first card without ScrollPattern/focus/raise."""
+        for _ in range(4):
             if not self._scroll_item(False):
                 break
-        try:
-            _, boxes, _ = self._grid_boxes()
-            if boxes.Length:
-                first = self._card_from_box(boxes.GetElement(0))
-                if first and self._visible(first["rect"]):
-                    return True
-        except Exception:
-            pass
+            try:
+                _, boxes, _ = self._grid_boxes()
+                if boxes.Length:
+                    first = self._card_from_box(boxes.GetElement(0))
+                    if first and self._visible(first["rect"]):
+                        return True
+            except Exception:
+                pass
         return False
 
     def _reset_top(self, steps=30):
-        # 扫描阶段绝不 focus/raise；只走 ScrollPattern 或静默 ScrollIntoView
+        # 扫描阶段绝不 focus/raise；ScrollPattern 的 SetScrollPercent 会 raise，
+        # 所以这里只用静默 ScrollIntoView。
         if self._scroll_top_silent():
             return
         self.last_find_reason = "滚动到顶部失败（静默方式不可用）"
 
     def _wheel(self, down=True):
-        try:
-            sp = self._content_scroll()
-            if sp is not None:
-                sp.Scroll(U.ScrollAmount_NoAmount,
-                          U.ScrollAmount_LargeIncrement if down else U.ScrollAmount_LargeDecrement)
-                time.sleep(0.35)
-                return
-        except Exception:
-            pass
-        # 没有 content ScrollPattern 时，静默 ScrollIntoView 优先于鼠标
+        # 静默优先：ScrollItemPattern.ScrollIntoView 不抢前台。
+        # 注意：content.ScrollPattern 的 Scroll()/SetScrollPercent() 在本机
+        # 会把微信 raise 到前台，所以扫描路径不再调用它。
         if self._scroll_item(down):
             return
         delta = -900 if down else 900

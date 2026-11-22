@@ -2,7 +2,7 @@
 
 > 来源：本地参考实现（豆包）2026-11-22，更新于 17:25。
 > 文中的 `tools/...`、`work/...` 是参考目录里的探针和产物，**没有随本仓库复制**。
-> 本仓库已落地的是 [viewer/cache_meta_parse.py](../viewer/cache_meta_parse.py) 的 `--live` 快照和 [viewer/cache_covers.py](../viewer/cache_covers.py) 的封面校验；`viewer/uia_scan.py` 已把无 focus 的 `ScrollIntoView` 作为 `content.ScrollPattern` 不可用时的静默 fallback。
+> 本仓库已落地的是 [viewer/cache_meta_parse.py](../viewer/cache_meta_parse.py) 的 `--live` 快照和 [viewer/cache_covers.py](../viewer/cache_covers.py) 的封面校验；`viewer/uia_scan.py` 的扫描分页已改用无 focus 的 `ScrollIntoView`（`content.ScrollPattern` 的 Scroll 会 raise，只在 find_card 精确滚动时保留）。
 
 ## 入口与层级
 

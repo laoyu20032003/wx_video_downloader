@@ -805,15 +805,16 @@ wx-dl.ps1 仍走“扫描内存明文头 + 拼接”路线
 | `keybd_event` PageDown/PageUp | 无效 |
 | `PostMessage` WM_KEYDOWN/WM_MOUSEWHEEL | 无效 |
 | UIA `page-profile` 后代 `ScrollPattern` | 没有暴露 |
-| 祖先 `class=content` 的 `ScrollPattern` | **可用**（viewer 的扫描分页/find_card 优先用它） |
+| 祖先 `class=content` 的 `ScrollPattern` | **可用，但 Scroll/SetScrollPercent 会 raise 前台**（仅 `find_card` 使用） |
 | 无 focus 的 `ScrollItemPattern.ScrollIntoView`（未聚焦/部分遮挡） | **可分页**（v0.2026-11-22 实测 30→180、15→442） |
 | 完全遮挡时的静默滚动 | 不触发后续分页（Chromium 原生遮挡检测） |
 | 真实鼠标滚轮/PageDown | 正常 |
 
 对本项目的含义：
 
-- `wx-viewer` 的扫描分页和 `find_card` 现在都优先用 `content` 祖先的 UIA `ScrollPattern`；
-- **扫描阶段不调用 `SetForegroundWindow`/`SetFocus`**；取不到 pattern 时先尝试无 focus 的 `ScrollItemPattern.ScrollIntoView`（不 SetFocus、不 raise），再回退鼠标；静默失败时保留当前批次，不再抢前台；
+- `wx-viewer` 的**扫描分页**使用无 focus 的 `ScrollItemPattern.ScrollIntoView`；
+- `content.ScrollPattern` 的 `Scroll()` / `SetScrollPercent()` 在本机实测会把微信 raise 到前台，因此扫描路径不使用它；`find_card` 的精确滚动仍保留 `ScrollPattern`；
+- **扫描阶段不调用 `SetForegroundWindow`/`SetFocus`**；静默失败时保留当前批次，不再抢前台；
 - 部分遮挡/未聚焦的 profile 页面可以静默分页；完全遮挡仍会失败；
 - 下载阶段的 `find_card`/hover 仍可能需要 focus，但不会在翻页扫描时主动 raise；
 - 手动滚动微信后，再点「重新扫描」可以并入下一批；
